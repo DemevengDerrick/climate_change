@@ -1,4 +1,4 @@
-"input/*" 
-"renv/"
-"renv.lock" 
-"Rprofile" 
+input/*
+renv/
+renv.lock
+Rprofile
