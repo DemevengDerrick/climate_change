@@ -32,6 +32,7 @@ flood_tiles <- sf::read_sf(flood_tiles) # flood tiles
 admin0 <- sf::read_sf(admin0_dir)
 
 # rasters
+pop_15_49 <- terra::rast(pop_dir)
 
 # DATA TRANSFORMATION -----------------------------------------------------
 
@@ -78,9 +79,10 @@ terra::vrt(selected_files, vrt_path, overwrite = TRUE)
 rp100 <- terra::rast(vrt_path)
 
 # v) Reclasify flood zones into 0 : No flood, and 1: flood depth >= 0.1
-
+rp100_binary <- terra::ifel(rp100 >= 0.1, 1, 0)
 
 # DATA VISUALIZATION ------------------------------------------------------
+plot(pop_15_49)
 plot(rp100)
 plot(terra::vect(ctry_admin0), add = TRUE, border = "red", lwd = 1)
 
