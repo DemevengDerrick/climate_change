@@ -16,19 +16,22 @@ pacman::p_load(
   sf,
   ggplot2,
   geodata,
-  terra
+  terra,
+  ggspatial
 )
 
 # INPUT VARIABLES ---------------------------------------------------------
-ctry_code <- "CMR"
+ctry_code <- "GHA"
 flood_dir <- "input/flood_layers_RP100/"
 flood_tiles <- "input/flood_tiles/tile_extents.geojson"
 admin0_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM0/geoBoundariesCGAZ_ADM0.shp"
 admin1_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM1/geoBoundariesCGAZ_ADM1.shp"
 admin2_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM2/geoBoundariesCGAZ_ADM2.shp"
-pop_dir <- "input/pop/female_pop_15_49.tif"
+pop_dir <- "input/pop/"
 
 # LOAD DATA ---------------------------------------------------------------
+pop_files <- list.files(path = "pop_dir", full.names = T)
+
 # vectors
 flood_tiles <- sf::read_sf(flood_tiles) # flood tiles
 admin0 <- sf::read_sf(admin0_dir)
@@ -226,18 +229,47 @@ ggplot2::ggplot(data = admin2_v_stat) +
   ggplot2::scale_fill_continuous(palette = "OrRd") +
   ggplot2::labs(
     fill = "percentage (%)",
-    title = "Women of Reproductive Age Exposed to River Floods in 2025",
-    caption = "Disclaimer: The boundaries and names shown and the designations used on this map do not imply official endorsement or acceptance by the United Nations."
+    title = paste("Women of Reproductive Age Exposed to River Floods in", ctry_code, "in 2025"),
+    caption = paste(
+      "Disclaimer: The boundaries and names shown and the designations used on \n",
+      "this map do not imply official endorsement or acceptance by the United Nations.\n\n",
+      "Data Source: WorldPop, Copernicus, and GeoBoundaries\n\n",
+      "Date:", today()
+    )
   ) +
-  ggplot2::theme_minimal()
+    # ---- SCALE BAR ----
+  ggspatial::annotation_scale(
+    location = "bl",
+    height = unit(0.1, "cm"),
+    width_hint = 0.3,
+    text_cex = 0.6,
+    line_width = 0.5,
+    unit_category = "metric"
+  ) +
 
+  # ---- NORTH ARROW ----
+  ggspatial::annotation_north_arrow(
+    location = "tl",
+    which_north = "true",
+    height = unit(0.7, "cm"),
+    width  = unit(0.7, "cm"),
+    pad_x = unit(0.2, "cm"),
+    pad_y = unit(0.2, "cm"),
+    style = ggspatial::north_arrow_fancy_orienteering(
+      text_size = 8,
+      line_width = 0.5
+    )
+  ) +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 12),
+    plot.caption = element_text(hjust = 0)
+  )
 
-
-
-
-
-
-
-
+# save the plot
+ggplot2::ggsave(
+  filename = paste0("output/flood_maps/", ctry_code, "_river_flood_exposure.jpg"),
+  scale = 1.2
+)
 
 
