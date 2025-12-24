@@ -24,12 +24,16 @@ ctry_code <- "CMR"
 flood_dir <- "input/flood_layers_RP100/"
 flood_tiles <- "input/flood_tiles/tile_extents.geojson"
 admin0_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM0/geoBoundariesCGAZ_ADM0.shp"
+admin1_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM1/geoBoundariesCGAZ_ADM1.shp"
+admin2_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM2/geoBoundariesCGAZ_ADM2.shp"
 pop_dir <- "input/pop/female_pop_15_49.tif"
 
 # LOAD DATA ---------------------------------------------------------------
 # vectors
 flood_tiles <- sf::read_sf(flood_tiles) # flood tiles
 admin0 <- sf::read_sf(admin0_dir)
+admin1 <- sf::read_sf(admin1_dir)
+admin2 <- sf::read_sf(admin2_dir)
 
 # rasters
 pop_15_49 <- terra::rast(pop_dir)
@@ -41,8 +45,8 @@ ctry_admin0 <- admin0 |>
   dplyr::filter(shapeGroup == ctry_code)
 
 # ii) intersect the country with the flood tiles
-ctry_admin0  <- st_make_valid(ctry_admin0)
-flood_tiles  <- st_make_valid(flood_tiles)
+ctry_admin0  <- sf::st_make_valid(ctry_admin0)
+flood_tiles  <- sf::st_make_valid(flood_tiles)
 
 ctry_admin0 <- sf::st_transform(ctry_admin0, sf::st_crs(flood_tiles))
 ctry_tiles <- sf::st_intersects(ctry_admin0, flood_tiles)
@@ -78,31 +82,112 @@ terra::vrt(selected_files, vrt_path, overwrite = TRUE)
 
 rp100 <- terra::rast(vrt_path)
 
+if (!terra::same.crs(rp100, pop_15_49)) {
+  # keep flood as binary-nearest when projecting
+  rp100 <- terra::project(rp100, pop_15_49, method = "near")
+}
+
 # v) Reclasify flood zones into 0 : No flood, and 1: flood depth >= 0.1
 rp100_binary <- terra::ifel(rp100 >= 0.1, 1, 0)
 
 # vi) Clip the pop and flood raster to the extend of country
-ctry_v <- terra::vect(ctry_admin0) # covert the sf polygon to a spatvector polygon
+admin0_v <- terra::vect(ctry_admin0) # covert the sf polygon to a spatvector polygon
 
-rp100_binary_crop <- terra::crop(rp100_binary, ctry_v) # crop the raster
-rp100_binary_clip <- terra::mask(rp100_bin_crop, ctry_v) # mask the raster
+rp100_binary_crop <- terra::crop(rp100_binary, admin0_v) # crop the raster
+rp100_binary_clip <- terra::mask(rp100_binary_crop, admin0_v) # mask the raster
 
-pop_15_49_crop <- terra::crop(pop_15_49, ctry_v) # crop the raster
-pop_15_49_clip <- terra::mask(pop_15_49, ctry_v) # mask the raster
+pop_15_49_crop <- terra::crop(pop_15_49, admin0_v) # crop the raster
+pop_15_49_clip <- terra::mask(pop_15_49_crop, admin0_v) # mask the raster
 
-# vii) Align and resample to 1km the flood raster based on the pop raster
-rp100_frac_1km <- resample(rp100_binary_clip, pop_15_49_clip, method = "average")
+# vii) Aggregate and Align to 1km the flood raster based on the pop raster
+if (!terra::same.crs(rp100_binary_clip, pop_15_49_clip)) { # Ensure rasters are in same CRS BEFORE factor math
+  rp100_binary_clip <- terra::project(rp100_binary_clip, pop_15_49_clip, method = "near")
+}
+
+rp100_binary_full <- terra::ifel(
+  is.na(rp100_binary_clip),
+  0,
+  rp100_binary_clip
+)
+
+fact <- floor(res(pop_15_49_clip) / res(rp100_binary_full)) # 2D aggregation factor (x,y)
+if (any(fact < 2)) stop("fact < 2: flood is not finer than pop (or CRS mismatch).")
+
+rp100_frac_1km <- terra::aggregate( # Aggregate 100m binary -> 1km fraction
+  rp100_binary_full,
+  fact = fact,
+  fun = mean,
+  na.rm = TRUE
+)
+
+rp100_frac_1km <- terra::resample(rp100_frac_1km, pop_15_49_clip, method = "near") # Align to pop grid (no averaging needed here)
+
+terra::global(rp100_frac_1km, range, na.rm = TRUE) # QC: should be within [0,1] and not just 0/1
+
+# viii) Compute population exposed
+pop_15_49_exposed <- rp100_frac_1km*pop_15_49_clip
+
+# ix) Export Raster of population exposed
+out_pop_15_49_flood_exposed <- sprintf("output/flood_exposure/%s_pop_15_49_flood_exposed.tif", ctry_code)
+out_pop_15_49_clip <- sprintf("output/flood_exposure/%s_pop_15_49_clip.tif", ctry_code)
+out_rp100_frac_1km <- sprintf("output/flood_exposure/%s_rp100_frac_1km.tif", ctry_code)
+out_rp100_binary_clip <- sprintf("output/flood_exposure/%s_rp100_binary_clip.tif", ctry_code)
+
+terra::writeRaster(
+  pop_15_49_exposed, 
+  out_pop_15_49_flood_exposed,
+  overwrite = TRUE,
+  wopt = list(
+    datatype = "FLT4S",
+    gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
+  )
+)
+
+terra::writeRaster(
+  pop_15_49_clip, 
+  out_pop_15_49_clip,
+  overwrite = TRUE,
+  wopt = list(
+    datatype = "FLT4S",
+    gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
+  )
+)
+
+terra::writeRaster(
+  rp100_frac_1km, 
+  out_rp100_frac_1km,
+  overwrite = TRUE,
+  wopt = list(
+    datatype = "FLT4S",
+    gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
+  )
+)
+
+terra::writeRaster(
+  rp100_binary_clip, 
+  out_rp100_binary_clip,
+  overwrite = TRUE,
+  wopt = list(
+    datatype = "FLT4S",
+    gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
+  )
+)
+
+# x) Compute Zonal statistics at admin0, admin1 and admin2
+admin1_v <- admin1 |> # filter to ctry code and convert to spatvector compatible with terra
+  dplyr::filter(shapeGroup == ctry_code) |>
+  terra::vect()
+
+admin2_v <- admin2 |> # filter to ctry code and convert to spatvector compatible with terra
+  dplyr::filter(shapeGroup == ctry_code) |>
+  terra::vect()
+
+terra::zonal(pop_15_49_exposed, admin0_v)
 
 # DATA VISUALIZATION ------------------------------------------------------
-plot(rp100_binary_clip)
-plot(pop_15_49_clip)
-
-# visualize tiles
-ggplot2::ggplot(data = flood_tiles) +
-  ggplot2::geom_sf() +
-  ggplot2::geom_raster(data = rp100)
-
-
+# plot(rp100_binary_clip)
+# plot(pop_15_49_clip)
+# plot(rp100_frac_1km*pop_15_49_clip)
 
 
 
