@@ -188,7 +188,7 @@ terra::zonal( # stats admin0
   admin0_v, 
   fun=sum,
   na.rm=T,
-) |> view()
+)
 
 # admin1
 terra::zonal( # stats admin1
@@ -196,7 +196,7 @@ terra::zonal( # stats admin1
   admin1_v, 
   fun=sum,
   na.rm=T,
-) |> view()
+)
 
 # admin2
 admin2_v_stat <- terra::zonal( # stats admin2
@@ -221,10 +221,15 @@ admin2_v_stat <- terra::zonal( # stats admin2
 
 
 # DATA VISUALIZATION ------------------------------------------------------
-# plot(rp100_binary_clip)
-# plot(pop_15_49_clip)
-# plot(rp100_frac_1km*pop_15_49_clip)
-
+ggplot2::ggplot(data = admin2_v_stat) +
+  ggplot2::geom_sf(aes(fill=perc_pop_15_49_exposed)) +
+  ggplot2::scale_fill_continuous(palette = "OrRd") +
+  ggplot2::labs(
+    fill = "percentage (%)",
+    title = "Women of Reproductive Age Exposed to River Floods in 2025",
+    caption = "Disclaimer: The boundaries and names shown and the designations used on this map do not imply official endorsement or acceptance by the United Nations."
+  ) +
+  ggplot2::theme_minimal()
 
 
 
