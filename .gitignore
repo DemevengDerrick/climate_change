@@ -1,4 +1,5 @@
 input/*
+output/*
 renv/
 renv.lock
 Rprofile
