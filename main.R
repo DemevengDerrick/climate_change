@@ -126,6 +126,7 @@ terra::global(rp100_frac_1km, range, na.rm = TRUE) # QC: should be within [0,1] 
 
 # viii) Compute population exposed
 pop_15_49_exposed <- rp100_frac_1km*pop_15_49_clip
+names(pop_15_49_exposed) <- "female_15_49_exposed"
 
 # ix) Export Raster of population exposed
 out_pop_15_49_flood_exposed <- sprintf("output/flood_exposure/%s_pop_15_49_flood_exposed.tif", ctry_code)
@@ -182,7 +183,42 @@ admin2_v <- admin2 |> # filter to ctry code and convert to spatvector compatible
   dplyr::filter(shapeGroup == ctry_code) |>
   terra::vect()
 
-terra::zonal(pop_15_49_exposed, admin0_v)
+terra::zonal( # stats admin0
+  pop_15_49_exposed, 
+  admin0_v, 
+  fun=sum,
+  na.rm=T,
+) |> view()
+
+# admin1
+terra::zonal( # stats admin1
+  pop_15_49_exposed, 
+  admin1_v, 
+  fun=sum,
+  na.rm=T,
+) |> view()
+
+# admin2
+admin2_v_stat <- terra::zonal( # stats admin2
+    pop_15_49_exposed, 
+    admin2_v, 
+    fun=sum,
+    na.rm=T,
+    as.polygons=T
+  )
+
+admin2_v_stat <- terra::zonal( # stats admin2
+    pop_15_49_clip, 
+    admin2_v_stat, 
+    fun=sum,
+    na.rm=T,
+    as.polygons=T
+  ) |>
+  sf::st_as_sf() |>
+  dplyr::mutate(
+    perc_pop_15_49_exposed = (female_15_49_exposed/female_pop_15_49)*100
+  )
+
 
 # DATA VISUALIZATION ------------------------------------------------------
 # plot(rp100_binary_clip)
