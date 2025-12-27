@@ -18,11 +18,12 @@ pacman::p_load(
   geodata,
   terra,
   ggspatial,
-  openxlsx
+  openxlsx,
+  scales
 )
 
 # INPUT VARIABLES ---------------------------------------------------------
-ctry_code <- "NGA"
+ctry_code <- "IND"
 flood_dir <- "input/flood_layers_RP100/"
 flood_tiles_dir <- "input/flood_tiles/tile_extents.geojson"
 admin0_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM0/geoBoundariesCGAZ_ADM0.shp"
@@ -271,6 +272,17 @@ admin2_join <- admin2 |>
     by = c("shapeID" = "admin.code")
   )
 
+# indicator by country
+ctry_indicators <- indicators |>
+  dplyr::group_by(country.code, year, indicator.name) |>
+  dplyr::summarise(
+    total.pop = sum(total.pop, na.rm = T),
+    pop.exposed = sum(pop.exposed),
+    perc.pop.exposed = (pop.exposed/total.pop)*100
+  )
+
+max_pop <- max(ctry_indicators$pop.exposed, na.rm = TRUE)
+
 # DATA VISUALIZATION ------------------------------------------------------
 ggplot2::ggplot(data = admin2_join) +
   ggplot2::geom_sf(aes(fill=perc.pop.exposed)) +
@@ -321,9 +333,40 @@ ggplot2::ggsave(
   scale = 2
 )
 
+# Histogram
+ggplot2::ggplot(ctry_indicators, aes(x = year)) +
+  # Bars: exposed population
+  ggplot2::geom_col(aes(y = pop.exposed), width = 0.65, alpha = 0.85) +
+  # Line + points: % exposed (scaled to left axis)
+  ggplot2::geom_line(aes(y = (perc.pop.exposed / 100) * max_pop, group = 1), linewidth = 1.1) +
+  ggplot2::geom_point(aes(y = (perc.pop.exposed / 100) * max_pop), size = 2.8) +
+  ggplot2::scale_x_continuous(breaks = ctry_indicators$year) +
+  ggplot2::scale_y_continuous(
+    name = "Total Women 15–49 exposed (population)",
+    labels = comma,
+    sec.axis = sec_axis(
+      ~ (. / max_pop) * 100,
+      name = "Percentage of Women 15–49 exposed (%)"
+    )
+  ) +
+  ggplot2::labs(
+    title = paste0("Women 15–49 Exposed to RP100 Floods (", unique(ctry_indicators$country.code), ")"),
+    subtitle = "Population projection: 2025 - 2030",
+    caption = paste(
+      "Disclaimer: The boundaries and names shown and the designations used do not imply official endorsement or acceptance by the United Nations."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 12) +
+  ggplot2::theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.caption = element_text(hjust = 0),
+    panel.grid.minor = element_blank()
+  )
 
-
-
-
-
-
+# save the plot
+ggplot2::ggsave(
+  filename = paste0("output/flood_maps/", ctry_code, "_river_flood_exposure_hist.jpg"),
+  scale = 1.2,
+  width = 10,
+  height = 8
+)
