@@ -24,7 +24,7 @@ pacman::p_load(
 )
 
 # INPUT VARIABLES ---------------------------------------------------------
-ctry_code <- "FRA"
+admin_code <- "FRA"
 flood_dir <- "input/flood_layers_RP100/"
 flood_tiles_dir <- "input/flood_tiles/tile_extents.geojson"
 admin0_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM0/geoBoundariesCGAZ_ADM0.shp"
@@ -60,7 +60,7 @@ admin2 <- sf::read_sf(admin2_dir)
 
 # i) filter admin0 to the country of interest
 ctry_admin0 <- admin0 |>
-  dplyr::filter(shapeGroup == ctry_code)
+  dplyr::filter(shapeGroup == admin_code)
 
 # ii) intersect the country with the flood tiles
 ctry_admin0  <- sf::st_make_valid(ctry_admin0)
@@ -93,7 +93,7 @@ selected_files <- selected_files[
 ]
 
 # iv) Mosaic the queried tiles
-vrt_path <- file.path("output/vrt_flood/", paste0(ctry_code, "_RP100_depth.vrt"))
+vrt_path <- file.path("output/vrt_flood/", paste0(admin_code, "_RP100_depth.vrt"))
 dir.create(dirname(vrt_path), recursive = TRUE, showWarnings = FALSE)
 
 terra::vrt(selected_files, vrt_path, overwrite = TRUE)
@@ -163,8 +163,8 @@ for(pop_file in pop_files){
 
   # ix) Export Raster of population exposed
   if(export_outputs == T){
-    out_pop_15_49_flood_exposed <- sprintf("output/flood_exposure/%s_pop_15_49_flood_exposed.tif", ctry_code, "_", year)
-    out_pop_15_49_clip <- sprintf("output/flood_exposure/%s_pop_15_49_clip.tif", ctry_code, "_", year)
+    out_pop_15_49_flood_exposed <- sprintf("output/flood_exposure/%s_pop_15_49_flood_exposed.tif", admin_code, "_", year)
+    out_pop_15_49_clip <- sprintf("output/flood_exposure/%s_pop_15_49_clip.tif", admin_code, "_", year)
 
     terra::writeRaster(
       pop_15_49_exposed, 
@@ -187,8 +187,8 @@ for(pop_file in pop_files){
     )
 
     if(skip == 0){
-      out_rp100_frac_1km <- sprintf("output/flood_exposure/%s_rp100_frac_1km.tif", ctry_code)
-      out_rp100_binary_clip <- sprintf("output/flood_exposure/%s_rp100_binary_clip.tif", ctry_code)
+      out_rp100_frac_1km <- sprintf("output/flood_exposure/%s_rp100_frac_1km.tif", admin_code)
+      out_rp100_binary_clip <- sprintf("output/flood_exposure/%s_rp100_binary_clip.tif", admin_code)
 
       terra::writeRaster(
         rp100_frac_1km, 
@@ -214,11 +214,11 @@ for(pop_file in pop_files){
 
   # x) Compute Zonal statistics at admin0, admin1 and admin2
   # admin1_v <- admin1 |> # filter to ctry code and convert to spatvector compatible with terra
-  #   dplyr::filter(shapeGroup == ctry_code) |>
+  #   dplyr::filter(shapeGroup == admin_code) |>
   #   terra::vect()
 
   admin2_v <- admin2 |> # filter to ctry code and convert to spatvector compatible with terra
-    dplyr::filter(shapeGroup == ctry_code) |>
+    dplyr::filter(shapeGroup == admin_code) |>
     terra::vect()
 
   # terra::zonal( # stats admin0
@@ -278,11 +278,11 @@ for(pop_file in pop_files){
 }
 
 indicators$id = 1:nrow(indicators) # update id
-openxlsx::write.xlsx(indicators, paste0("output/zonal_stats/",ctry_code,"_indicators.xlsx")) # export to excel
+openxlsx::write.xlsx(indicators, paste0("output/zonal_stats/",admin_code,"_indicators.xlsx")) # export to excel
 
 # join indicators to shapefiles for mapping
 admin2_join <- admin2 |>
-  dplyr::filter(shapeGroup == ctry_code) |>
+  dplyr::filter(shapeGroup == admin_code) |>
   dplyr::left_join(
     indicators,
     by = c("shapeID" = "admin.code")
@@ -308,7 +308,7 @@ ggplot2::ggplot(data = admin2_join) +
   ggplot2::labs(
     fill = "percentage (%)",
     color = "percentage (%)",
-    title = paste("Women of Reproductive Age Exposed to River Floods in", ctry_code),
+    title = paste("Women of Reproductive Age Exposed to River Floods in", admin_code),
     caption = paste(
       "Disclaimer: The boundaries and names shown and the designations used on \n",
       "this map do not imply official endorsement or acceptance by the United Nations.\n\n",
@@ -348,7 +348,7 @@ ggplot2::ggplot(data = admin2_join) +
 
 # save the plot
 ggplot2::ggsave(
-  filename = paste0("output/flood_maps/", ctry_code, "_river_flood_exposure.jpg"),
+  filename = paste0("output/flood_maps/", admin_code, "_river_flood_exposure.jpg"),
   scale = 2
 )
 
@@ -384,7 +384,7 @@ ggplot2::ggplot(ctry_indicators, aes(x = year)) +
 
 # save the plot
 ggplot2::ggsave(
-  filename = paste0("output/flood_maps/trend/", ctry_code, "_river_flood_exposure_hist.jpg"),
+  filename = paste0("output/flood_maps/trend", admin_code, "_river_flood_exposure_hist.jpg"),
   scale = 1.2,
   width = 10,
   height = 8
