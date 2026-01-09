@@ -208,9 +208,9 @@ for(pop_raster in exposure_stat$file){
   
   exposure_stat$pop_exposed[i] <- zonal_stat_exposed$pop_exposed[1]
   exposure_stat$pop_tot[i] <- zonal_stat_pop_tot$pop_tot[1]
-  i <- i+1
 
   cli::cli_progress_update(pb, i)
+  i <- i+1
 }
 
 cli::cli_progress_done(pb)
@@ -243,7 +243,7 @@ pyramid_count <-
   #ggplot2::geom_bar(aes(x = pop_tot, y = age_group), stat = "identity", color = "white", fill = "grey") +
   ggplot2::geom_bar(aes(x = pop_exposed, y = age_group, fill = sex), stat = "identity", width = 0.9, color = "white") +
   ggplot2::labs(
-    title = "Flood Exposure by Age Group (Count)",
+    title = paste("Flood Exposure by Age Group (Count): ", ctry_code),
     caption = "Data Source: WorldPop, Copernicus",
     y = "Age Group",
     x = "Population Count (in thousands)"
@@ -271,7 +271,7 @@ pyramid_perc <-
   #ggplot2::geom_bar(aes(x = perc_exposed, y = age_group, fill = sex), stat = "identity", width = 0.9, color = "white") +
   ggplot2::geom_bar(aes(x = perc_exposed, y = age_group, fill = sex), stat = "identity", width = 0.9, color = "white") +
   ggplot2::labs(
-    title = "Flood Exposure by Age Group (Percentage)",
+    title = paste("Flood Exposure by Age Group (Percentage):", ctry_code),
     caption = "Data Source: WorldPop, Copernicus",
     y = "Age Group",
     x = "% Population"
@@ -296,7 +296,14 @@ pyramid_perc <-
 
 pyramid_count / pyramid_perc
 
-ggplot2::ggsave(filename = "output/flood_maps/exposure_pyramid.jpg", scale = 1.2, width = 15, height = 10)
+ggplot2::ggsave(
+  filename = "output/flood_maps/exposure_pyramid.jpg", 
+  scale = 1.2, 
+  width = 15, 
+  height = 10,
+  dpi = 600,
+  device = ragg::agg_png
+)
 
 # interactive map
 mapview::mapviewOptions(fgb = FALSE)  # helps if you have many layers
@@ -307,3 +314,4 @@ m3 <- mapview::mapview(flood_bin, layer.name = "Flood binary", maxpixels = 2e6)
 m4 <- mapview::mapview(exposure, layer.name = "Exposure", maxpixels = 2e6)
 
 m1 + m2 + m3 + m4
+
