@@ -3,389 +3,471 @@
 #                                CLIMATE CHANGE PROJECT                                         #
 #                                 By Derrick DEMEVENG                                           #
 #                                                                                               #
+#  Purpose: Flood exposure analysis across demographic groups at admin2 level.                  #
+#  Run:     source("main.R")                                                                    #
+#                                                                                               #
+#  Population groups analysed:                                                                  #
+#    Total population, Women 15-49, Youth 15-24, Young Women 15-24,                            #
+#    Adolescents 10-19, Adolescent Girls 10-19, Children <5,                                   #
+#    Population 65+, Women 65+                                                                  #
+#                                                                                               #
 #################################################################################################
 
 # LOAD LIBRARIES -------------------------------------------------------
-if(!require("pacman")) install.packages("pacman")
+if (!require("pacman")) install.packages("pacman")
 
 pacman::p_load(
-  tidyverse,
-  dplyr,
-  stringr,
-  tidyr,
-  sf,
-  ggplot2,
-  geodata,
-  terra,
-  ggspatial,
-  openxlsx,
-  scales,
-  lwgeom
+  dplyr, stringr, sf, ggplot2,
+  geodata, terra, ggspatial,
+  openxlsx, scales, lwgeom, purrr, tibble,
+  ggrepel, patchwork, ggnewscale,
+  officer, flextable
 )
 
-# INPUT VARIABLES ---------------------------------------------------------
-ctry_code <- "FRA"
-flood_dir <- "input/flood_layers_RP100/"
-flood_tiles_dir <- "input/flood_tiles/tile_extents.geojson"
-admin0_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM0/geoBoundariesCGAZ_ADM0.shp"
-#admin1_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM1/geoBoundariesCGAZ_ADM1.shp"
-admin2_dir <- "input/geoboundaries/geoBoundariesCGAZ_ADM2/geoBoundariesCGAZ_ADM2.shp"
-pop_dir <- "input/pop/"
-export_outputs <- F
-
-# CREATE DATAFRAME FOR STORING INDICATORS PER YEAR
-indicators <- tibble::tibble(
-  id = character(),
-  indicator.name = character(),
-  indicator.code = character(),
-  country.code = character(),
-  admin.level = integer(),
-  admin.code = character(),
-  admin.name = character(),
-  year = integer(),
-  total.pop = numeric(),
-  pop.exposed = numeric(),
-  perc.pop.exposed = numeric()
-)
-
-# LOAD DATA ---------------------------------------------------------------
-
-# vectors
-flood_tiles <- sf::read_sf(flood_tiles_dir) # flood tiles
-admin0 <- sf::read_sf(admin0_dir)
-#admin1 <- sf::read_sf(admin1_dir)
-admin2 <- sf::read_sf(admin2_dir)
-
-# DATA TRANSFORMATION -----------------------------------------------------
-
-# i) filter admin0 to the country of interest
-ctry_admin0 <- admin0 |>
-  dplyr::filter(shapeGroup == ctry_code)
-
-# ii) intersect the country with the flood tiles
-ctry_admin0  <- sf::st_make_valid(ctry_admin0)
-flood_tiles  <- sf::st_make_valid(flood_tiles)
-
-ctry_admin0 <- sf::st_transform(ctry_admin0, sf::st_crs(flood_tiles))
-ctry_tiles <- sf::st_intersects(ctry_admin0, flood_tiles)
-idx <- unlist(ctry_tiles)
-
-# iii) query the flood tiles
-# a) Pull tile codes
-ctry_tile_codes <- flood_tiles[idx, ] |>
-  dplyr::mutate(
-    tile_name = paste0("ID", id, "_", name)
-  ) |>
-  dplyr::pull(tile_name)
-
-# b) Select the right tiles
-all_files <- list.files(flood_dir, full.names = TRUE)
-
-selected_files <- all_files[
-  stringr::str_detect(
-    basename(all_files),
-    paste(ctry_tile_codes, collapse = "|")
-  )
-]
-
-selected_files <- selected_files[
-  stringr::str_detect(selected_files, "_RP100_depth\\.tif$")
-]
-
-# iv) Mosaic the queried tiles
-vrt_path <- file.path("output/vrt_flood/", paste0(ctry_code, "_RP100_depth.vrt"))
-dir.create(dirname(vrt_path), recursive = TRUE, showWarnings = FALSE)
-
-terra::vrt(selected_files, vrt_path, overwrite = TRUE)
-
-rp100 <- terra::rast(vrt_path)
-
-# v) Reclasify flood zones into 0 : No flood, and 1: flood depth >= 0.1
-rp100_binary <- terra::ifel(rp100 >= 0.1, 1, 0)
-
-admin0_v <- terra::vect(ctry_admin0) # covert the sf polygon to a spatvector polygon
-
-# vi) Clip the flood raster to the extend of country
-rp100_binary_crop <- terra::crop(rp100_binary, admin0_v) # crop the raster
-rp100_binary_clip <- terra::mask(rp100_binary_crop, admin0_v) # mask the raster
-
-#------ Looping through multiple population years
-pop_files <- list.files(path = pop_dir, full.names = T)
-skip = 0
-for(pop_file in pop_files){
-
-  bname <- stringr::str_remove(basename(pop_file), "\\.tif$") # extract file basename
-  year <- stringr::str_extract(bname, "\\d{4}")
-
-  # rasters
-  pop_15_49 <- terra::rast(pop_file)
-
-  if (!terra::same.crs(rp100, pop_15_49)) {
-    # keep flood as binary-nearest when projecting
-    rp100 <- terra::project(rp100, pop_15_49, method = "near")
-  }
-
-  # vi) Clip the pop raster to the extend of country
-  pop_15_49_crop <- terra::crop(pop_15_49, admin0_v) # crop the raster
-  pop_15_49_clip <- terra::mask(pop_15_49_crop, admin0_v) # mask the raster
-
-  # vii) Aggregate and Align to 1km the flood raster based on the pop raster
-  if(skip == 0){
-    if (!terra::same.crs(rp100_binary_clip, pop_15_49_clip)) { # Ensure rasters are in same CRS BEFORE factor math
-        rp100_binary_clip <- terra::project(rp100_binary_clip, pop_15_49_clip, method = "near")
-      }
-    
-    rp100_binary_full <- terra::ifel(
-      is.na(rp100_binary_clip),
-      0,
-      rp100_binary_clip
-    )
-  }
-
-  fact <- floor(res(pop_15_49_clip) / res(rp100_binary_full)) # 2D aggregation factor (x,y)
-  if (any(fact < 2)) stop("fact < 2: flood is not finer than pop (or CRS mismatch).")
-
-  rp100_frac_1km <- terra::aggregate( # Aggregate 100m binary -> 1km fraction
-    rp100_binary_full,
-    fact = fact,
-    fun = mean,
-    na.rm = TRUE
-  )
-
-  rp100_frac_1km <- terra::resample(rp100_frac_1km, pop_15_49_clip, method = "near") # Align to pop grid (no averaging needed here)
-
-  terra::global(rp100_frac_1km, range, na.rm = TRUE) # QC: should be within [0,1] and not just 0/1
-
-  # viii) Compute population exposed
-  pop_15_49_exposed <- rp100_frac_1km*pop_15_49_clip
-  names(pop_15_49_exposed) <- "female_pop_15_49_exposed"
-  names(pop_15_49_clip) <- "female_pop_15_49"
-
-  # ix) Export Raster of population exposed
-  if(export_outputs == T){
-    out_pop_15_49_flood_exposed <- sprintf("output/flood_exposure/%s_pop_15_49_flood_exposed.tif", ctry_code, "_", year)
-    out_pop_15_49_clip <- sprintf("output/flood_exposure/%s_pop_15_49_clip.tif", ctry_code, "_", year)
-
-    terra::writeRaster(
-      pop_15_49_exposed, 
-      out_pop_15_49_flood_exposed,
-      overwrite = TRUE,
-      wopt = list(
-        datatype = "FLT4S",
-        gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
-      )
-    )
-
-    terra::writeRaster(
-      pop_15_49_clip, 
-      out_pop_15_49_clip,
-      overwrite = TRUE,
-      wopt = list(
-        datatype = "FLT4S",
-        gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
-      )
-    )
-
-    if(skip == 0){
-      out_rp100_frac_1km <- sprintf("output/flood_exposure/%s_rp100_frac_1km.tif", ctry_code)
-      out_rp100_binary_clip <- sprintf("output/flood_exposure/%s_rp100_binary_clip.tif", ctry_code)
-
-      terra::writeRaster(
-        rp100_frac_1km, 
-        out_rp100_frac_1km,
-        overwrite = TRUE,
-        wopt = list(
-          datatype = "FLT4S",
-          gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
-        )
-      )
-
-      terra::writeRaster(
-        rp100_binary_clip, 
-        out_rp100_binary_clip,
-        overwrite = TRUE,
-        wopt = list(
-          datatype = "FLT4S",
-          gdal = c("COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER")
-        )
-      )
-    }
-  }
-
-  # x) Compute Zonal statistics at admin0, admin1 and admin2
-  # admin1_v <- admin1 |> # filter to ctry code and convert to spatvector compatible with terra
-  #   dplyr::filter(shapeGroup == ctry_code) |>
-  #   terra::vect()
-
-  admin2_v <- admin2 |> # filter to ctry code and convert to spatvector compatible with terra
-    dplyr::filter(shapeGroup == ctry_code) |>
-    terra::vect()
-
-  # terra::zonal( # stats admin0
-  #   pop_15_49_exposed, 
-  #   admin0_v, 
-  #   fun=sum,
-  #   na.rm=T,
-  # )
-
-  # admin1
-  # terra::zonal( # stats admin1
-  #   pop_15_49_exposed, 
-  #   admin1_v, 
-  #   fun=sum,
-  #   na.rm=T,
-  # )
-
-  # admin2
-  admin2_v_stat <- terra::zonal( # stats admin2
-      pop_15_49_exposed, 
-      admin2_v, 
-      fun=sum,
-      na.rm=T,
-      as.polygons=T
-    )
-
-  admin2_v_stat <- terra::zonal( # stats admin2
-      pop_15_49_clip, 
-      admin2_v_stat, 
-      fun=sum,
-      na.rm=T,
-      as.polygons=T
-    ) |>
-    sf::st_as_sf() |>
-    dplyr::mutate(
-      perc_pop_15_49_exposed = (female_pop_15_49_exposed/female_pop_15_49)*100
-    )
-  
-  # intermidiary data frame to store intermidiary data
-  year_df <- tibble::tibble(
-    id               = NA,          # or any ID
-    indicator.name   = "Women 15–49 exposed to RP100 floods",
-    indicator.code   = "wraf100",
-    country.code     = admin2_v_stat$shapeGroup,
-    admin.code       = admin2_v_stat$shapeID,       # or ADM2 code
-    admin.level      = as.integer(2),
-    admin.name       = admin2_v_stat$shapeName,
-    year             = as.integer(year),
-    total.pop        = admin2_v_stat$female_pop_15_49,
-    pop.exposed      = admin2_v_stat$female_pop_15_49_exposed,
-    perc.pop.exposed = admin2_v_stat$perc_pop_15_49_exposed
-  )
-
-  indicators <- dplyr::bind_rows(indicators, year_df)
-
-  skip <- skip + 1
+# LOAD PACKAGE FUNCTIONS -----------------------------------------------
+if (requireNamespace("devtools", quietly = TRUE)) {
+  devtools::load_all(quiet = TRUE)
+} else {
+  source("R/worldpop_data.R")
+  source("R/flood_utils.R")
+  source("R/pop_utils.R")
+  source("R/deprivation_utils.R")
+  source("R/exposure_utils.R")
+  source("R/viz_utils.R")
+  source("R/report_utils.R")
 }
 
-indicators$id = 1:nrow(indicators) # update id
-openxlsx::write.xlsx(indicators, paste0("output/zonal_stats/",ctry_code,"_indicators.xlsx")) # export to excel
+# INPUT PARAMETERS -----------------------------------------------------
+ctry_code       <- "KEN"
+ctry_name       <- "Kenya"
+return_period   <- 100
+flood_threshold <- 0
+year            <- 2020
 
-# join indicators to shapefiles for mapping
-admin2_join <- admin2 |>
-  dplyr::filter(shapeGroup == ctry_code) |>
+hazard_name     <- "River Flood"
+hazard_code     <- "riv_flood"
+
+# Deprivation index settings
+# GRDI score range: 0 (least deprived) to 100 (most deprived)
+# Threshold of 50 = above-median deprivation (relatively deprived population)
+dep_threshold <- 50
+grdi_path     <- paste0(
+  "input/gridded_relative_deprivation_index/",
+  "CIESIN_SEDAC_PMP_GRDI_2010_2020_1.00-20260316_120329/",
+  "povmap-grdi-v1-geotiff/povmap-grdi-v1.tif"
+)
+
+flood_dir        <- "input/flood_layers_RP100/"
+flood_tiles_path <- "input/flood_tiles/tile_extends.geojson"
+admin0_path      <- "input/Kenya_Admin_Boundaries/KEN_Admin_0.shp"
+admin1_path      <- "input/Kenya_Admin_Boundaries/KEN_Admin_1.shp"
+admin2_path      <- "input/Kenya_Admin_Boundaries/KEN_Admin_2.shp"
+download_dir     <- "input/worldpop_raw"  # raw global 1km CN band files
+pop_dir          <- "input/pop"           # processed group rasters from wp_build_all_groups()
+
+# Output paths — all outputs are organised under output/{ctry_code}/
+out_base      <- file.path("output", ctry_code)
+out_maps      <- file.path(out_base, "flood_maps")
+out_stats     <- file.path(out_base, "zonal_stats")
+out_reports   <- file.path(out_base, "reports")
+
+indicators_out     <- file.path(out_stats,   paste0(ctry_code, "_indicators.xlsx"))
+map_out            <- file.path(out_maps,    paste0(ctry_code, "_exposure_by_group.jpg"))
+bars_out           <- file.path(out_maps,    paste0(ctry_code, "_exposure_bars.jpg"))
+dotplot_out        <- file.path(out_maps,    paste0(ctry_code, "_exposure_dotplot.jpg"))
+bubble_out         <- file.path(out_maps,    paste0(ctry_code, "_exposure_bubble.jpg"))
+hazard_map_out     <- file.path(out_maps,    paste0(ctry_code, "_hazard_layer.jpg"))
+pop_map_out        <- file.path(out_maps,    paste0(ctry_code, "_population_layer.jpg"))
+overlay_out        <- file.path(out_maps,    paste0(ctry_code, "_hazard_pop_overlay.jpg"))
+pop_facet_out      <- file.path(out_maps,    paste0(ctry_code, "_pop_by_group.jpg"))
+overlay_facet_out  <- file.path(out_maps,    paste0(ctry_code, "_flood_overlay_by_group.jpg"))
+dep_map_out        <- file.path(out_maps,    paste0(ctry_code, "_deprivation.jpg"))
+workflow_out       <- file.path(out_maps,    paste0(ctry_code, "_methodology_workflow.jpg"))
+scenario_chart_out  <- file.path(out_maps,    paste0(ctry_code, "_scenario_comparison.jpg"))
+top5_heatmap_out    <- file.path(out_maps,    paste0(ctry_code, "_top5_districts_heatmap.jpg"))
+map_vuln_vuln_out   <- file.path(out_maps,    paste0(ctry_code, "_exposure_vuln_vs_vuln.jpg"))
+map_vuln_total_out  <- file.path(out_maps,    paste0(ctry_code, "_exposure_vuln_vs_total.jpg"))
+report_out          <- file.path(out_reports, paste0(ctry_code, "_flood_exposure_summary.docx"))
+
+# WORLDPOP DATA CHECK --------------------------------------------------
+# Check which global 1km constrained UN-adjusted band files are downloaded.
+# If processed group rasters are missing, build them from the raw band files.
+wp_status <- wp_check_global_downloaded(year, download_dir)
+n_found   <- sum(wp_status$exists)
+n_total   <- nrow(wp_status)
+
+message(
+  "\n--- WorldPop Population Data ---\n",
+  "  Dataset : Global 1km Constrained UN-adjusted (R2025A)\n",
+  "  Country : ", ctry_name, " (", ctry_code, ")  |  Year: ", year, "\n",
+  "  Raw band files found: ", n_found, " / ", n_total,
+  " in '", download_dir, "'\n",
+  if (n_found == n_total) {
+    "  Status  : All band files present.\n"
+  } else {
+    paste0("  Status  : ", n_total - n_found,
+           " band file(s) missing — run wp_build_all_groups() to download.\n")
+  }
+)
+
+# Check whether processed group rasters exist in pop_dir.
+pop_files_exist <- length(list.files(
+  pop_dir,
+  pattern = paste0("^", tolower(ctry_code), "_.+_", year, "_global_1km_CN\\.tif$")
+)) == length(WP_GROUPS)
+
+if (!pop_files_exist) {
+  message("  Processed group rasters not found in '", pop_dir,
+          "' — building now (this may take several minutes) ...")
+
+  # Load boundaries first (needed for clipping); repeat after this block
+  .tmp_admin0 <- sf::read_sf(admin0_path) |>
+    dplyr::mutate(shapeGroup = ctry_code)
+
+  wp_build_all_groups(
+    iso3         = ctry_code,
+    year         = year,
+    download_dir = download_dir,
+    pop_dir      = pop_dir,
+    boundary     = .tmp_admin0,
+    scope        = "global"
+  )
+  rm(.tmp_admin0)
+  message("  Processed rasters ready in '", pop_dir, "'.")
+} else {
+  message("  Processed group rasters found in '", pop_dir,
+          "' — skipping wp_build_all_groups().\n",
+          "  Using: Global 1km Constrained UN-adjusted rasters clipped to ",
+          ctry_name, " (", ctry_code, ").\n",
+          "  NOTE : For 100m resolution use wp_build_all_groups(scope = 'country').\n")
+}
+message("--------------------------------\n")
+
+# LOAD BOUNDARY DATA ---------------------------------------------------
+# Kenya-specific boundaries; remap columns to the standard names used by
+# exposure functions (shapeGroup, shapeID, shapeName).
+ctry_admin0 <- sf::read_sf(admin0_path) |>
+  dplyr::mutate(shapeGroup = ctry_code)
+
+admin1_ctry <- sf::read_sf(admin1_path) |>
+  dplyr::mutate(shapeGroup = ctry_code,
+                shapeID    = paste0(ctry_code, "_ADM1_", dplyr::row_number()),
+                shapeName  = Admin_1)
+
+admin2_ctry <- sf::read_sf(admin2_path) |>
+  dplyr::mutate(shapeGroup = ctry_code,
+                shapeID    = paste0(ctry_code, "_ADM2_", dplyr::row_number()),
+                shapeName  = NAME_2)
+
+# FLOOD MOSAIC & PRE-PROCESSING ----------------------------------------
+tile_files     <- fld_select_tiles(ctry_admin0, flood_tiles_path, flood_dir,
+                                   return_period)
+rp100          <- fld_build_vrt(tile_files, file.path(
+                    out_base, "vrt_flood",
+                    paste0(ctry_code, "_RP", return_period, "_depth.vrt")))
+rp100_bin      <- fld_binarise(rp100, flood_threshold)
+rp100_bin_clip <- fld_clip(rp100_bin, ctry_admin0)
+
+# Reference grid: use the total_pop raster (all group rasters share this grid)
+pop_ref_file <- list.files(pop_dir,
+                            pattern = paste0("^", tolower(ctry_code), "_total_pop_"),
+                            full.names = TRUE)[1]
+pop_ref      <- terra::rast(pop_ref_file)
+pop_ref_c    <- pop_clip(pop_ref, ctry_admin0)
+
+flood_frac   <- fld_aggregate_to_pop(rp100_bin_clip, pop_ref_c)
+
+# DEPRIVATION / VULNERABILITY MASK ------------------------------------
+dep_mask <- dep_build_mask(grdi_path, pop_ref_c, threshold = dep_threshold)
+message("Deprivation mask built at GRDI threshold >= ", dep_threshold)
+
+# DIAGNOSTIC MAPS (hazard, population, deprivation, overlay) ----------
+dir.create(out_maps,                           recursive = TRUE, showWarnings = FALSE)
+dir.create(out_stats,                          recursive = TRUE, showWarnings = FALSE)
+dir.create(out_reports,                        recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(out_base, "vrt_flood"),   recursive = TRUE, showWarnings = FALSE)
+
+# Workflow diagram (methodology overview)
+viz_workflow_diagram(out_path = workflow_out)
+message("Workflow diagram saved to: ", workflow_out)
+
+viz_plot_hazard(
+  flood_frac_ras = flood_frac,
+  ctry_sf        = ctry_admin0,
+  admin1_sf      = admin1_ctry,
+  ctry_code      = ctry_code,
+  hazard_name    = hazard_name,
+  return_period  = return_period,
+  out_path       = hazard_map_out
+)
+message("Hazard map saved to: ", hazard_map_out)
+
+viz_plot_population(
+  pop_ras   = pop_ref_c,
+  ctry_sf   = ctry_admin0,
+  admin1_sf = admin1_ctry,
+  ctry_code = ctry_code,
+  year      = year,
+  out_path  = pop_map_out
+)
+message("Population map saved to: ", pop_map_out)
+
+viz_plot_overlay(
+  pop_ras        = pop_ref_c,
+  flood_frac_ras = flood_frac,
+  ctry_sf        = ctry_admin0,
+  admin1_sf      = admin1_ctry,
+  ctry_code      = ctry_code,
+  hazard_name    = hazard_name,
+  return_period  = return_period,
+  year           = year,
+  out_path       = overlay_out
+)
+message("Overlay map saved to: ", overlay_out)
+
+# Align GRDI for visualisation (already clipped via dep_mask, need raw values too)
+grdi_aligned <- dep_align_to_pop(grdi_path, pop_ref_c)
+grdi_c       <- pop_clip(grdi_aligned, ctry_admin0)
+dep_mask_c   <- pop_clip(dep_mask,     ctry_admin0)
+
+viz_plot_deprivation(
+  grdi_ras  = grdi_c,
+  dep_mask  = dep_mask_c,
+  ctry_sf   = ctry_admin0,
+  admin1_sf = admin1_ctry,
+  ctry_code = ctry_code,
+  threshold = dep_threshold,
+  out_path  = dep_map_out
+)
+message("Deprivation map saved to: ", dep_map_out)
+
+viz_facet_population(
+  pop_dir   = pop_dir,
+  ctry_sf   = ctry_admin0,
+  admin1_sf = admin1_ctry,
+  ctry_code = ctry_code,
+  year      = year,
+  out_path  = pop_facet_out
+)
+message("Faceted population map saved to: ", pop_facet_out)
+
+viz_facet_overlay(
+  pop_dir        = pop_dir,
+  flood_frac_ras = flood_frac,
+  ctry_sf        = ctry_admin0,
+  admin1_sf      = admin1_ctry,
+  ctry_code      = ctry_code,
+  hazard_name    = hazard_name,
+  return_period  = return_period,
+  year           = year,
+  out_path       = overlay_facet_out
+)
+message("Faceted overlay map saved to: ", overlay_facet_out)
+
+# EXPOSURE ACROSS ALL DEMOGRAPHIC GROUPS --------------------------------
+indicators <- exp_run_all_groups(
+  pop_dir        = pop_dir,
+  flood_frac_ras = flood_frac,
+  ctry_boundary  = ctry_admin0,
+  admin_zones    = admin2_ctry,
+  dep_mask       = dep_mask,
+  hazard_name    = hazard_name,
+  hazard_code    = hazard_code,
+  return_period  = return_period,
+  admin_level    = 2L
+)
+
+# EXPORT RESULTS -------------------------------------------------------
+ctry_indicators <- exp_summarise_by_country(indicators)
+
+# Convenience subsets by scenario
+ind_raw         <- dplyr::filter(indicators,       scenario == "raw_exposure")
+ind_vuln_vuln   <- dplyr::filter(indicators,       scenario == "vuln_vs_vuln")
+ind_vuln_total  <- dplyr::filter(indicators,       scenario == "vuln_vs_total")
+ctry_raw        <- dplyr::filter(ctry_indicators,  scenario == "raw_exposure")
+ctry_vuln_vuln  <- dplyr::filter(ctry_indicators,  scenario == "vuln_vs_vuln")
+ctry_vuln_total <- dplyr::filter(ctry_indicators,  scenario == "vuln_vs_total")
+
+wb <- openxlsx::createWorkbook()
+
+# Admin2 — one sheet per scenario
+openxlsx::addWorksheet(wb, "Admin2 Raw Exposure")
+openxlsx::writeData(wb, "Admin2 Raw Exposure",    ind_raw)
+openxlsx::addWorksheet(wb, "Admin2 Vuln vs Vuln")
+openxlsx::writeData(wb, "Admin2 Vuln vs Vuln",    ind_vuln_vuln)
+openxlsx::addWorksheet(wb, "Admin2 Vuln vs Total")
+openxlsx::writeData(wb, "Admin2 Vuln vs Total",   ind_vuln_total)
+
+# Country summary — all scenarios together (scenario column distinguishes them)
+openxlsx::addWorksheet(wb, "Country Summary")
+openxlsx::writeData(wb, "Country Summary",        ctry_indicators)
+
+openxlsx::saveWorkbook(wb, indicators_out, overwrite = TRUE)
+message("Indicators saved to: ", indicators_out)
+
+# Footnotes for each exposure map (explain numerator / denominator)
+fn_raw <- paste0(
+  "Numerator: group population \u00d7 flood fraction (share of 1km cell inundated). ",
+  "Denominator: total group population.\n",
+  "Interpretation: of all people in this demographic group, what share lives in a flood-prone area?"
+)
+fn_vuln_vuln <- paste0(
+  "Numerator: deprived population \u00d7 flood fraction ",
+  "(deprived = GRDI score \u2265 50, CIESIN/SEDAC GRDI v1). ",
+  "Denominator: total deprived (GRDI \u2265 50) population in each group.\n",
+  "Interpretation: of the deprived members of this group, what share also lives in a flood-prone area?"
+)
+fn_vuln_total <- paste0(
+  "Numerator: deprived population \u00d7 flood fraction ",
+  "(deprived = GRDI score \u2265 50, CIESIN/SEDAC GRDI v1). ",
+  "Denominator: total group population (deprived + non-deprived).\n",
+  "Interpretation: of all members of this group, what share is both deprived AND flood-exposed?"
+)
+
+# VISUALISE ------------------------------------------------------------
+
+## 1a. Choropleth — raw exposure (all group pop, % of total group) ------
+admin2_join <- admin2_ctry |>
   dplyr::left_join(
-    indicators,
+    dplyr::select(ind_raw, admin.code, group.label, year,
+                  total.pop, pop.exposed, perc.pop.exposed),
     by = c("shapeID" = "admin.code")
   )
 
-# indicator by country
-ctry_indicators <- indicators |>
-  dplyr::group_by(country.code, year, indicator.name) |>
-  dplyr::summarise(
-    total.pop = sum(total.pop, na.rm = T),
-    pop.exposed = sum(pop.exposed),
-    perc.pop.exposed = (pop.exposed/total.pop)*100
+viz_choropleth(
+  admin_sf      = admin2_join,
+  ctry_sf       = ctry_admin0,
+  admin1_sf     = admin1_ctry,
+  ctry_code     = ctry_code,
+  hazard_name   = hazard_name,
+  return_period = return_period,
+  year          = year,
+  footnote      = fn_raw,
+  out_path      = map_out,
+  ncol          = 3
+)
+message("Choropleth (raw) saved to: ", map_out)
+
+## 1b. Choropleth — deprived pop exposed, % of deprived pop -------------
+admin2_join_vv <- admin2_ctry |>
+  dplyr::left_join(
+    dplyr::select(ind_vuln_vuln, admin.code, group.label, year,
+                  total.pop, pop.exposed, perc.pop.exposed),
+    by = c("shapeID" = "admin.code")
   )
 
-max_pop <- max(ctry_indicators$pop.exposed, na.rm = TRUE)
+viz_choropleth(
+  admin_sf      = admin2_join_vv,
+  ctry_sf       = ctry_admin0,
+  admin1_sf     = admin1_ctry,
+  ctry_code     = ctry_code,
+  hazard_name   = paste0(hazard_name, " \u2014 Deprived Pop (% of deprived)"),
+  return_period = return_period,
+  year          = year,
+  footnote      = fn_vuln_vuln,
+  out_path      = map_vuln_vuln_out,
+  ncol          = 3
+)
+message("Choropleth (vuln vs vuln) saved to: ", map_vuln_vuln_out)
 
-# DATA VISUALIZATION ------------------------------------------------------
-ggplot2::ggplot(data = admin2_join) +
-  ggplot2::geom_sf(aes(fill=perc.pop.exposed, color=perc.pop.exposed)) +
-  ggplot2::geom_sf(data = ctry_admin0, fill = NA, color = "black") +
-  ggplot2::scale_fill_continuous(palette = "OrRd") +
-  ggplot2::scale_color_continuous(palette = "OrRd") +
-  ggplot2::labs(
-    fill = "percentage (%)",
-    color = "percentage (%)",
-    title = paste("Women of Reproductive Age Exposed to River Floods in", ctry_code),
-    caption = paste(
-      "Disclaimer: The boundaries and names shown and the designations used on \n",
-      "this map do not imply official endorsement or acceptance by the United Nations.\n\n",
-      "Data Source: WorldPop, Copernicus, and GeoBoundaries\n\n",
-      "Date:", today()
-    )
-  ) +
-  ggplot2::facet_wrap(~year) +
-  # ---- SCALE BAR ----
-  ggspatial::annotation_scale(
-    location = "bl",
-    height = unit(0.1, "cm"),
-    width_hint = 0.3,
-    text_cex = 0.6,
-    line_width = 0.5,
-    unit_category = "metric"
-  ) +
-  # ---- NORTH ARROW ----
-  ggspatial::annotation_north_arrow(
-    location = "tl",
-    which_north = "true",
-    height = unit(0.7, "cm"),
-    width  = unit(0.7, "cm"),
-    pad_x = unit(0.2, "cm"),
-    pad_y = unit(0.2, "cm"),
-    style = ggspatial::north_arrow_fancy_orienteering(
-      text_size = 8,
-      line_width = 0.5
-    )
-  ) +
-  ggplot2::theme_minimal() +
-  ggplot2::theme(
-    plot.title = element_text(face = "bold", hjust = 0.5, size = 14),
-    plot.caption = element_text(hjust = 0, size = 12),
-    legend.position = "bottom"
+## 1c. Choropleth — deprived pop exposed, % of total group pop ----------
+admin2_join_vt <- admin2_ctry |>
+  dplyr::left_join(
+    dplyr::select(ind_vuln_total, admin.code, group.label, year,
+                  total.pop, pop.exposed, perc.pop.exposed),
+    by = c("shapeID" = "admin.code")
   )
 
-# save the plot
-ggplot2::ggsave(
-  filename = paste0("output/flood_maps/", ctry_code, "_river_flood_exposure.jpg"),
-  scale = 2
+viz_choropleth(
+  admin_sf      = admin2_join_vt,
+  ctry_sf       = ctry_admin0,
+  admin1_sf     = admin1_ctry,
+  ctry_code     = ctry_code,
+  hazard_name   = paste0(hazard_name, " \u2014 Deprived Pop (% of total group)"),
+  return_period = return_period,
+  year          = year,
+  footnote      = fn_vuln_total,
+  out_path      = map_vuln_total_out,
+  ncol          = 3
+)
+message("Choropleth (vuln vs total) saved to: ", map_vuln_total_out)
+
+## 2. Horizontal bar chart — absolute exposed by group (raw) -----------
+viz_group_bars(
+  ctry_indicators = ctry_raw,
+  ctry_code       = ctry_code,
+  hazard_name     = hazard_name,
+  return_period   = return_period,
+  out_path        = bars_out
+)
+message("Bar chart saved to: ", bars_out)
+
+## 3. Lollipop chart — % exposed by group (raw, ranked) ----------------
+viz_exposure_dotplot(
+  ctry_indicators = ctry_raw,
+  ctry_code       = ctry_code,
+  hazard_name     = hazard_name,
+  return_period   = return_period,
+  out_path        = dotplot_out
+)
+message("Dot plot saved to: ", dotplot_out)
+
+## 4. Bubble chart — group size vs exposure rate (raw) -----------------
+viz_exposure_bubble(
+  ctry_indicators = ctry_raw,
+  ctry_code       = ctry_code,
+  hazard_name     = hazard_name,
+  return_period   = return_period,
+  out_path        = bubble_out
+)
+message("Bubble chart saved to: ", bubble_out)
+
+## 5. Scenario comparison — raw vs vuln/vuln vs vuln/total -------------
+viz_compare_scenarios(
+  ctry_indicators = ctry_indicators,
+  ctry_code       = ctry_code,
+  hazard_name     = hazard_name,
+  return_period   = return_period,
+  out_path        = scenario_chart_out
+)
+message("Scenario comparison chart saved to: ", scenario_chart_out)
+
+## 6. Top-5 districts heatmap (raw exposure) ---------------------------
+viz_top_districts_heatmap(
+  indicators    = ind_raw,
+  ctry_code     = ctry_code,
+  hazard_name   = hazard_name,
+  return_period = return_period,
+  scenario      = "raw_exposure",
+  n_districts   = 5L,
+  out_path      = top5_heatmap_out
+)
+message("Top-5 districts heatmap saved to: ", top5_heatmap_out)
+
+# GENERATE WORD REPORT -------------------------------------------------
+rpt_generate_word(
+  ctry_code            = ctry_code,
+  ctry_name            = ctry_name,
+  hazard_name          = hazard_name,
+  return_period        = return_period,
+  year                 = year,
+  ctry_indicators      = ctry_raw,
+  ctry_indicators_vuln = ctry_vuln_total,   # deprived pop exposed, % of total group
+  img_hazard           = hazard_map_out,
+  img_population       = pop_map_out,
+  img_overlay          = overlay_out,
+  img_deprivation      = dep_map_out,
+  img_workflow         = workflow_out,
+  img_choropleth       = map_out,
+  img_scenario_chart   = scenario_chart_out,
+  img_top5_heatmap     = top5_heatmap_out,
+  img_bars             = bars_out,
+  img_dotplot          = dotplot_out,
+  img_bubble           = bubble_out,
+  dep_threshold        = dep_threshold,
+  out_path             = report_out
 )
 
-# Histogram
-ggplot2::ggplot(ctry_indicators, aes(x = year)) +
-  # Bars: exposed population
-  ggplot2::geom_col(aes(y = pop.exposed), width = 0.65, alpha = 0.85) +
-  # Line + points: % exposed (scaled to left axis)
-  ggplot2::geom_line(aes(y = (perc.pop.exposed / 100) * max_pop, group = 1), linewidth = 1.1) +
-  ggplot2::geom_point(aes(y = (perc.pop.exposed / 100) * max_pop), size = 2.8) +
-  ggplot2::scale_x_continuous(breaks = ctry_indicators$year) +
-  ggplot2::scale_y_continuous(
-    name = "Total Women 15–49 exposed (population)",
-    labels = comma,
-    sec.axis = sec_axis(
-      ~ (. / max_pop) * 100,
-      name = "Percentage of Women 15–49 exposed (%)"
-    )
-  ) +
-  ggplot2::labs(
-    title = paste0("Women 15–49 Exposed to RP100 Floods (", unique(ctry_indicators$country.code), ")"),
-    subtitle = "Population projection: 2025 - 2030",
-    caption = paste(
-      "Disclaimer: The boundaries and names shown and the designations used do not imply official endorsement or acceptance by the United Nations."
-    )
-  ) +
-  ggplot2::theme_minimal(base_size = 12) +
-  ggplot2::theme(
-    plot.title = element_text(face = "bold", hjust = 0.5),
-    plot.caption = element_text(hjust = 0),
-    panel.grid.minor = element_blank()
-  )
+message("\nDone. All outputs saved.")
 
-# save the plot
-ggplot2::ggsave(
-  filename = paste0("output/flood_maps/trend/", ctry_code, "_river_flood_exposure_hist.jpg"),
-  scale = 1.2,
-  width = 10,
-  height = 8
-)
+

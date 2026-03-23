@@ -1,0 +1,30 @@
+Package: climatechange
+Title: Flood and Conflict Exposure Analysis
+Version: 0.1.0
+Authors@R: person("Derrick", "DEMEVENG", role = c("aut", "cre"),
+                   email = "demeveng@example.com")
+Description: Utility functions for computing population exposure to river
+    flooding using Copernicus GLOFAS flood hazard rasters, WorldPop
+    age/sex-disaggregated population rasters, and GeoBoundaries or GADM
+    administrative boundaries.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    dplyr,
+    ggplot2,
+    ggspatial,
+    openxlsx,
+    patchwork,
+    purrr,
+    scales,
+    sf,
+    stringr,
+    terra,
+    tibble
+Suggests:
+    cli,
+    mapview,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

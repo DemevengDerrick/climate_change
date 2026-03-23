@@ -3,3 +3,4 @@ output/*
 renv/
 renv.lock
 Rprofile
+data/*
