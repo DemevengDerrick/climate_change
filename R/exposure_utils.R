@@ -215,8 +215,8 @@ exp_run_all_groups <- function(pop_dir, flood_frac_ras, ctry_boundary,
                                 admin_zones)
     ind_2 <- do.call(exp_build_indicator_tibble, c(
       list(zonal_sf       = zonal_v2,
-           indicator_name = paste0("Vulnerable ", label, " exposed to ",
-                                   hazard_name, " (% of deprived) (RP",
+           indicator_name = paste0("Poor ", label, " exposed to ",
+                                   hazard_name, " (% of poor) (RP",
                                    return_period, ")"),
            indicator_code = paste0(row$group_name, "_vuln_",
                                    hazard_code, "_RP", return_period),
@@ -235,7 +235,7 @@ exp_run_all_groups <- function(pop_dir, flood_frac_ras, ctry_boundary,
     zonal_v3 <- exp_zonal_stats(exposed_v3, total_v3, admin_zones)
     ind_3 <- do.call(exp_build_indicator_tibble, c(
       list(zonal_sf       = zonal_v3,
-           indicator_name = paste0("Vulnerable ", label, " exposed to ",
+           indicator_name = paste0("Poor ", label, " exposed to ",
                                    hazard_name, " (% of total group) (RP",
                                    return_period, ")"),
            indicator_code = paste0(row$group_name, "_vuln_of_total_",

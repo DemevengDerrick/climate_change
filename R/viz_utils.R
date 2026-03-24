@@ -321,6 +321,268 @@ viz_plot_overlay <- function(pop_ras, flood_frac_ras, ctry_sf,
 
 
 # ---------------------------------------------------------------------------
+# INDIVIDUAL GROUP EXPOSURE MAP
+# ---------------------------------------------------------------------------
+
+#' Individual exposure map for a single demographic group
+#'
+#' Plots one group's population raster (greyscale) with flood fraction overlay
+#' (orange). Produces one standalone file per group.
+#'
+#' @param pop_ras        SpatRaster. Population raster for this group
+#'   (already clipped to country).
+#' @param flood_frac_ras SpatRaster. Flood fraction raster (0–1, same grid as pop).
+#' @param ctry_sf        sf. Country outline.
+#' @param admin1_sf      sf or NULL. Admin-1 context lines.
+#' @param ctry_code      Character. ISO3 country code.
+#' @param group_label    Character. Human-readable group name for title/caption.
+#' @param hazard_name    Character. E.g. `"River Flood"`.
+#' @param return_period  Integer. Return period (years).
+#' @param year           Integer. Population year.
+#' @param out_path       Character or NULL. File path to save the image.
+#' @param width          Numeric. Image width in inches (default 8).
+#' @param height         Numeric. Image height in inches (default 7).
+#' @param dpi            Numeric (default 250).
+#'
+#' @return ggplot object (invisibly if saved).
+#' @export
+viz_plot_group_exposure <- function(pop_ras, flood_frac_ras, ctry_sf,
+                                     admin1_sf     = NULL,
+                                     ctry_code     = "",
+                                     group_label   = "Population Group",
+                                     hazard_name   = "River Flood",
+                                     return_period = 100,
+                                     year          = 2020,
+                                     out_path      = NULL,
+                                     width         = 8,
+                                     height        = 7,
+                                     dpi           = 250) {
+  df_pop   <- .rast_to_df(pop_ras, "pop")
+  df_pop   <- df_pop[df_pop$pop > 0, ]
+  df_pop$pop_log <- log10(df_pop$pop + 1)
+
+  df_flood <- .rast_to_df(flood_frac_ras, "flood_frac")
+  df_flood <- df_flood[df_flood$flood_frac > 0.1, ]
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_sf(data = ctry_sf, fill = .LAND_FILL, color = NA) +
+    ggplot2::geom_raster(data = df_pop,
+                          ggplot2::aes(x = x, y = y, fill = pop_log),
+                          alpha = 0.85) +
+    ggplot2::scale_fill_distiller(
+      palette = "Greys", direction = 1,
+      name    = "Population\n(log\u2081\u2080)",
+      breaks  = c(0, 1, 2, 3, 4),
+      labels  = c("1", "10", "100", "1,000", "10,000"),
+      guide   = ggplot2::guide_colorbar(
+        barwidth = 5, barheight = 0.4, order = 2,
+        title.position = "top", title.hjust = 0.5,
+        label.theme = ggplot2::element_text(angle = 45, hjust = 1, size = 8)
+      )
+    ) +
+    ggnewscale::new_scale_fill() +
+    ggplot2::geom_raster(data = df_flood,
+                          ggplot2::aes(x = x, y = y, fill = flood_frac),
+                          alpha = 0.70) +
+    ggplot2::scale_fill_distiller(
+      palette = "Oranges", direction = 1,
+      name    = "Flood fraction",
+      breaks  = c(0, 0.25, 0.50, 0.75, 1.00),
+      labels  = c("0%", "25%", "50%", "75%", "100%"),
+      guide   = ggplot2::guide_colorbar(
+        barwidth = 5, barheight = 0.4, order = 1,
+        title.position = "top", title.hjust = 0.5,
+        label.theme = ggplot2::element_text(angle = 45, hjust = 1, size = 8)
+      )
+    ) +
+    { if (!is.null(admin1_sf))
+        ggplot2::geom_sf(data = admin1_sf, fill = NA, color = "grey45",
+                         linewidth = 0.2)
+    } +
+    ggplot2::geom_sf(data = ctry_sf, fill = NA, color = "#333333",
+                     linewidth = 0.5) +
+    ggspatial::annotation_scale(
+      location = "bl", height = ggplot2::unit(0.1, "cm"),
+      width_hint = 0.3, text_cex = 0.6, line_width = 0.4,
+      unit_category = "metric"
+    ) +
+    ggspatial::annotation_north_arrow(
+      location = "tl", which_north = "true",
+      height = ggplot2::unit(0.8, "cm"), width = ggplot2::unit(0.8, "cm"),
+      style = ggspatial::north_arrow_fancy_orienteering(
+        text_size = 8, line_width = 0.4)
+    ) +
+    ggplot2::labs(
+      title    = paste0(group_label, " \u2014 Flood Exposure"),
+      subtitle = paste0(ctry_code, "  |  ", hazard_name,
+                        " (RP", return_period, ")  |  ", year, " population"),
+      caption  = paste0(
+        "Grey layer: ", group_label, " population (WorldPop ", year,
+        ", 1 km constrained UN-adjusted).\n",
+        "Orange layer: fraction of each 1 km\u00b2 cell within the ",
+        hazard_name, " (RP", return_period, ") flood zone.\n",
+        "Numerator (exposed): \u03a3(population \u00d7 flood fraction) per admin zone. ",
+        "Denominator: total ", group_label, " population."
+      )
+    ) +
+    ggplot2::coord_sf(expand = FALSE) +
+    ggplot2::theme_void(base_size = 12) +
+    ggplot2::theme(
+      plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5, size = 16),
+      plot.subtitle   = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 12),
+      plot.caption    = ggplot2::element_text(hjust = 0, size = 9, color = "grey45"),
+      legend.position = "bottom",
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      plot.margin     = ggplot2::margin(6, 6, 10, 6)
+    )
+
+  if (!is.null(out_path)) {
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(out_path, plot = p, width = width, height = height,
+                    dpi = dpi, bg = "white")
+    return(invisible(p))
+  }
+  p
+}
+
+
+# ---------------------------------------------------------------------------
+# INDIVIDUAL GROUP VULNERABILITY-EXPOSURE MAP
+# ---------------------------------------------------------------------------
+
+#' Individual exposure map for the deprived (vulnerable) sub-population of a group
+#'
+#' Applies the deprivation mask to the group population raster, then overlays
+#' the flood fraction. Only the deprived population cells are shown; the caption
+#' clearly states the numerator and denominator used.
+#'
+#' @param pop_ras        SpatRaster. Full group population raster (clipped to country).
+#' @param dep_mask       SpatRaster. Binary deprivation mask (1 = deprived, NA/0 = not).
+#' @param flood_frac_ras SpatRaster. Flood fraction raster (0–1, same grid).
+#' @param ctry_sf        sf. Country outline.
+#' @param admin1_sf      sf or NULL. Admin-1 context lines.
+#' @param ctry_code      Character. ISO3 country code.
+#' @param group_label    Character. Human-readable group name.
+#' @param hazard_name    Character.
+#' @param return_period  Integer.
+#' @param year           Integer.
+#' @param dep_threshold  Numeric. GRDI threshold used (for caption, default 50).
+#' @param out_path       Character or NULL.
+#' @param width          Numeric. Default 8.
+#' @param height         Numeric. Default 7.
+#' @param dpi            Numeric. Default 250.
+#'
+#' @return ggplot object (invisibly if saved).
+#' @export
+viz_plot_group_vuln <- function(pop_ras, dep_mask, flood_frac_ras, ctry_sf,
+                                 admin1_sf     = NULL,
+                                 ctry_code     = "",
+                                 group_label   = "Population Group",
+                                 hazard_name   = "River Flood",
+                                 return_period = 100,
+                                 year          = 2020,
+                                 dep_threshold = 50,
+                                 out_path      = NULL,
+                                 width         = 8,
+                                 height        = 7,
+                                 dpi           = 250) {
+  # Apply deprivation mask to get deprived-only population
+  dep_mask_aligned <- terra::resample(dep_mask, pop_ras, method = "near")
+  pop_vuln <- pop_ras * dep_mask_aligned
+
+  df_pop   <- .rast_to_df(pop_vuln, "pop")
+  df_pop   <- df_pop[!is.na(df_pop$pop) & df_pop$pop > 0, ]
+  df_pop$pop_log <- log10(df_pop$pop + 1)
+
+  df_flood <- .rast_to_df(flood_frac_ras, "flood_frac")
+  df_flood <- df_flood[df_flood$flood_frac > 0.1, ]
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_sf(data = ctry_sf, fill = .LAND_FILL, color = NA) +
+    ggplot2::geom_raster(data = df_pop,
+                          ggplot2::aes(x = x, y = y, fill = pop_log),
+                          alpha = 0.85) +
+    ggplot2::scale_fill_distiller(
+      palette = "Purples", direction = 1,
+      name    = "Poor pop\n(log\u2081\u2080)",
+      breaks  = c(0, 1, 2, 3, 4),
+      labels  = c("1", "10", "100", "1,000", "10,000"),
+      guide   = ggplot2::guide_colorbar(
+        barwidth = 5, barheight = 0.4, order = 2,
+        title.position = "top", title.hjust = 0.5,
+        label.theme = ggplot2::element_text(angle = 45, hjust = 1, size = 8)
+      )
+    ) +
+    ggnewscale::new_scale_fill() +
+    ggplot2::geom_raster(data = df_flood,
+                          ggplot2::aes(x = x, y = y, fill = flood_frac),
+                          alpha = 0.70) +
+    ggplot2::scale_fill_distiller(
+      palette = "Oranges", direction = 1,
+      name    = "Flood fraction",
+      breaks  = c(0, 0.25, 0.50, 0.75, 1.00),
+      labels  = c("0%", "25%", "50%", "75%", "100%"),
+      guide   = ggplot2::guide_colorbar(
+        barwidth = 5, barheight = 0.4, order = 1,
+        title.position = "top", title.hjust = 0.5,
+        label.theme = ggplot2::element_text(angle = 45, hjust = 1, size = 8)
+      )
+    ) +
+    { if (!is.null(admin1_sf))
+        ggplot2::geom_sf(data = admin1_sf, fill = NA, color = "grey45",
+                         linewidth = 0.2)
+    } +
+    ggplot2::geom_sf(data = ctry_sf, fill = NA, color = "#333333",
+                     linewidth = 0.5) +
+    ggspatial::annotation_scale(
+      location = "bl", height = ggplot2::unit(0.1, "cm"),
+      width_hint = 0.3, text_cex = 0.6, line_width = 0.4,
+      unit_category = "metric"
+    ) +
+    ggspatial::annotation_north_arrow(
+      location = "tl", which_north = "true",
+      height = ggplot2::unit(0.8, "cm"), width = ggplot2::unit(0.8, "cm"),
+      style = ggspatial::north_arrow_fancy_orienteering(
+        text_size = 8, line_width = 0.4)
+    ) +
+    ggplot2::labs(
+      title    = paste0(group_label, " \u2014 Poverty & Flood Exposure"),
+      subtitle = paste0(ctry_code, "  |  ", hazard_name,
+                        " (RP", return_period, ")  |  ", year,
+                        " population  |  GRDI \u2265 ", dep_threshold),
+      caption  = paste0(
+        "Purple layer: poor ", group_label,
+        " population (GRDI \u2265 ", dep_threshold, "; WorldPop ", year,
+        " \u00d7 poverty mask).\n",
+        "Orange layer: fraction of each 1 km\u00b2 cell within the ",
+        hazard_name, " (RP", return_period, ") flood zone.\n",
+        "Numerator (exposed poor): \u03a3(poor population \u00d7 flood fraction) per admin zone.\n",
+        "Denominator (% of poor pop): total poor ", group_label, " population.",
+        "  |  Denominator (% of total pop): total ", group_label, " population."
+      )
+    ) +
+    ggplot2::coord_sf(expand = FALSE) +
+    ggplot2::theme_void(base_size = 12) +
+    ggplot2::theme(
+      plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5, size = 16),
+      plot.subtitle   = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 12),
+      plot.caption    = ggplot2::element_text(hjust = 0, size = 9, color = "grey45"),
+      legend.position = "bottom",
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      plot.margin     = ggplot2::margin(6, 6, 12, 6)
+    )
+
+  if (!is.null(out_path)) {
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(out_path, plot = p, width = width, height = height,
+                    dpi = dpi, bg = "white")
+    return(invisible(p))
+  }
+  p
+}
+
+
+# ---------------------------------------------------------------------------
 # CHOROPLETH MAP — per hazard, faceted by demographic group
 # ---------------------------------------------------------------------------
 
@@ -443,6 +705,161 @@ viz_choropleth <- function(admin_sf, ctry_sf, ctry_code,
     return(invisible(p))
   }
   p
+}
+
+
+# ---------------------------------------------------------------------------
+# INDIVIDUAL GROUP CHOROPLETH — exposure + vulnerability side by side
+# ---------------------------------------------------------------------------
+
+#' Build one choropleth panel (single group, single scenario)
+#'
+#' Internal helper used by [viz_choropleth_group()].
+#' Returns a ggplot object (no saving).
+.choropleth_panel <- function(admin_sf, ctry_sf, admin1_sf,
+                               panel_title, legend_label,
+                               palette = "YlOrRd") {
+  ggplot2::ggplot(data = admin_sf) +
+    ggplot2::geom_sf(ggplot2::aes(fill = perc.pop.exposed), color = NA) +
+    { if (!is.null(admin1_sf))
+        ggplot2::geom_sf(data = admin1_sf, fill = NA,
+                         color = "white", linewidth = 0.35)
+    } +
+    ggplot2::geom_sf(data = ctry_sf, fill = NA,
+                     color = "#111111", linewidth = 0.55) +
+    ggplot2::scale_fill_distiller(
+      palette   = palette, direction = 1,
+      name      = legend_label,
+      limits    = c(0, NA),
+      labels    = function(x) paste0(x, "%"),
+      na.value  = "grey88",
+      guide     = ggplot2::guide_colorbar(
+        barwidth = 8, barheight = 0.45,
+        title.position = "top", title.hjust = 0.5,
+        label.theme = ggplot2::element_text(size = 9)
+      )
+    ) +
+    ggspatial::annotation_scale(
+      location = "bl", height = ggplot2::unit(0.1, "cm"),
+      width_hint = 0.25, text_cex = 0.5, line_width = 0.4,
+      unit_category = "metric"
+    ) +
+    ggspatial::annotation_north_arrow(
+      location = "tl", which_north = "true",
+      height = ggplot2::unit(0.6, "cm"), width = ggplot2::unit(0.6, "cm"),
+      style  = ggspatial::north_arrow_fancy_orienteering(
+        text_size = 7, line_width = 0.4)
+    ) +
+    ggplot2::labs(title = panel_title) +
+    ggplot2::coord_sf(expand = FALSE) +
+    ggplot2::theme_void(base_size = 11) +
+    ggplot2::theme(
+      plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5,
+                                               size = 13,
+                                               margin = ggplot2::margin(b = 4)),
+      legend.position = "bottom",
+      legend.title    = ggplot2::element_text(size = 9),
+      legend.text     = ggplot2::element_text(size = 9),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      plot.margin     = ggplot2::margin(4, 6, 4, 6)
+    )
+}
+
+
+#' Two-panel choropleth for a single demographic group
+#'
+#' Produces a side-by-side map showing:
+#'  - **Left**: raw flood exposure (% of all group members exposed).
+#'  - **Right**: climate vulnerability exposure (% of deprived group exposed,
+#'    denominator = deprived population).
+#'
+#' Panels use independent colour scales so each is as informative as possible.
+#' A shared caption explains both numerators and denominators.
+#'
+#' @param admin_sf_raw  sf. Admin2 boundaries joined to **raw** scenario
+#'   indicators for this group (must contain `perc.pop.exposed`).
+#' @param admin_sf_vuln sf. Admin2 boundaries joined to **vuln_vs_vuln**
+#'   scenario indicators for this group (same column).
+#' @param ctry_sf       sf. Country outline.
+#' @param admin1_sf     sf or NULL. Admin-1 context lines.
+#' @param ctry_code     Character. ISO3 code.
+#' @param group_label   Character. Human-readable group name for the title.
+#' @param hazard_name   Character.
+#' @param return_period Integer.
+#' @param year          Integer.
+#' @param dep_threshold Numeric. GRDI threshold (for caption, default 50).
+#' @param out_path      Character or NULL. File path to save the combined image.
+#' @param width         Numeric. Total width inches (default 14).
+#' @param height        Numeric. Height inches (default 8).
+#' @param dpi           Numeric (default 250).
+#'
+#' @return patchwork object (invisibly if saved).
+#' @export
+viz_choropleth_group <- function(admin_sf_raw, admin_sf_vuln,
+                                  ctry_sf, admin1_sf = NULL,
+                                  ctry_code     = "",
+                                  group_label   = "Population Group",
+                                  hazard_name   = "River Flood",
+                                  return_period = 100,
+                                  year          = 2020,
+                                  dep_threshold = 50,
+                                  out_path      = NULL,
+                                  width         = 14,
+                                  height        = 8,
+                                  dpi           = 250) {
+
+  p_raw <- .choropleth_panel(
+    admin_sf    = admin_sf_raw,
+    ctry_sf     = ctry_sf,
+    admin1_sf   = admin1_sf,
+    panel_title = paste0("Flood Exposure\n",
+                         "(% of all ", group_label, " exposed)"),
+    legend_label = "% exposed\n(all group)",
+    palette      = "YlOrRd"
+  )
+
+  p_vuln <- .choropleth_panel(
+    admin_sf    = admin_sf_vuln,
+    ctry_sf     = ctry_sf,
+    admin1_sf   = admin1_sf,
+    panel_title = paste0("Poverty & Flood Exposure\n",
+                         "(% of poor ", group_label, " exposed)"),
+    legend_label = paste0("% exposed\n(poor, GRDI\u2265", dep_threshold, ")"),
+    palette      = "RdPu"
+  )
+
+  combined <- (p_raw | p_vuln) +
+    patchwork::plot_annotation(
+      title    = paste0(group_label, " \u2014 Exposure & Poverty"),
+      subtitle = paste0(ctry_code, "  |  ", hazard_name,
+                        " (RP", return_period, ")  |  ", year, " population"),
+      caption  = paste0(
+        "Left panel \u2014 Numerator: ", group_label,
+        " population \u00d7 flood fraction per district. ",
+        "Denominator: total ", group_label, " population.\n",
+        "Right panel \u2014 Numerator: poor ", group_label,
+        " (GRDI \u2265 ", dep_threshold, ") \u00d7 flood fraction. ",
+        "Denominator: total poor ", group_label, " population.\n",
+        "Flood hazard: ", hazard_name, " 1-in-", return_period,
+        "-year event. Population: WorldPop ", year,
+        " constrained UN-adjusted 1 km."
+      ),
+      theme = ggplot2::theme(
+        plot.title    = ggplot2::element_text(face = "bold", hjust = 0.5, size = 16),
+        plot.subtitle = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 12),
+        plot.caption  = ggplot2::element_text(hjust = 0, size = 9, color = "grey45",
+                                               margin = ggplot2::margin(t = 6)),
+        plot.background = ggplot2::element_rect(fill = "white", color = NA)
+      )
+    )
+
+  if (!is.null(out_path)) {
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(out_path, plot = combined, width = width, height = height,
+                    dpi = dpi, bg = "white")
+    return(invisible(combined))
+  }
+  combined
 }
 
 
@@ -1076,7 +1493,10 @@ viz_facet_overlay <- function(pop_dir, flood_frac_ras, ctry_sf,
 # DEPRIVATION MAP
 # ---------------------------------------------------------------------------
 
-#' Side-by-side maps of GRDI index and resulting vulnerability mask
+#' Stacked maps of GRDI index and resulting vulnerability mask (top/bottom layout)
+#'
+#' Panels are stacked vertically (1 column, 2 rows) so each map occupies the
+#' full page width, making fine spatial detail clearly visible.
 #'
 #' @param grdi_ras  SpatRaster. Aligned GRDI raster (0-100).
 #' @param dep_mask  SpatRaster. Binary vulnerability mask (1/0).
@@ -1085,17 +1505,17 @@ viz_facet_overlay <- function(pop_dir, flood_frac_ras, ctry_sf,
 #' @param ctry_code Character. ISO3 country code.
 #' @param threshold Numeric. Threshold used to create mask.
 #' @param out_path  Character or `NULL`. Save path.
-#' @param width     Numeric. Inches (default `12`).
-#' @param height    Numeric. Inches (default `5`).
-#' @param dpi       Numeric (default `200`).
+#' @param width     Numeric. Inches (default `9`).
+#' @param height    Numeric. Inches (default `13`).
+#' @param dpi       Numeric (default `220`).
 #'
 #' @return patchwork ggplot.
 #' @export
 viz_plot_deprivation <- function(grdi_ras, dep_mask, ctry_sf,
                                   admin1_sf = NULL, ctry_code,
                                   threshold = 50,
-                                  out_path = NULL, width = 12, height = 5,
-                                  dpi = 200) {
+                                  out_path = NULL, width = 9, height = 13,
+                                  dpi = 220) {
 
   df_grdi <- .rast_to_df(grdi_ras, "grdi")
   df_mask <- .rast_to_df(dep_mask,  "vuln")
@@ -1109,15 +1529,27 @@ viz_plot_deprivation <- function(grdi_ras, dep_mask, ctry_sf,
         ggplot2::geom_sf(data = admin1_sf, fill = NA,
                          color = "grey45", linewidth = 0.2),
       ggplot2::geom_sf(data = ctry_sf, fill = NA,
-                       color = "#333333", linewidth = 0.45),
+                       color = "#333333", linewidth = 0.5),
+      ggspatial::annotation_scale(
+        location = "bl", height = ggplot2::unit(0.12, "cm"),
+        width_hint = 0.25, text_cex = 0.6, line_width = 0.4,
+        unit_category = "metric"
+      ),
+      ggspatial::annotation_north_arrow(
+        location = "tl", which_north = "true",
+        height = ggplot2::unit(0.8, "cm"), width = ggplot2::unit(0.8, "cm"),
+        style  = ggspatial::north_arrow_fancy_orienteering(
+          text_size = 8, line_width = 0.4)
+      ),
       ggplot2::coord_sf(expand = FALSE),
-      ggplot2::theme_void(base_size = 10),
+      ggplot2::theme_void(base_size = 12),
       ggplot2::theme(
-        plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5, size = 14),
-        plot.subtitle   = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 11),
+        plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5, size = 16),
+        plot.subtitle   = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 12),
         legend.position = "bottom",
+        legend.key.width = ggplot2::unit(1.8, "cm"),
         plot.background = ggplot2::element_rect(fill = "white", color = NA),
-        plot.margin     = ggplot2::margin(4, 4, 4, 4)
+        plot.margin     = ggplot2::margin(6, 6, 6, 6)
       )
     )
   }
@@ -1128,17 +1560,17 @@ viz_plot_deprivation <- function(grdi_ras, dep_mask, ctry_sf,
                           ggplot2::aes(x = x, y = y, fill = grdi)) +
     ggplot2::scale_fill_distiller(
       palette = "RdYlGn", direction = -1,
-      name    = "GRDI score\n(0=least, 100=most deprived)",
+      name    = "GRDI score  (0 = low poverty \u2192 100 = high poverty)",
       limits  = c(0, 100),
       guide   = ggplot2::guide_colorbar(
-        barwidth = 5, barheight = 0.4,
+        barwidth = 12, barheight = 0.5,
         title.position = "top", title.hjust = 0.5,
-        label.theme = ggplot2::element_text(angle = 45, hjust = 1, size = 7)
+        label.theme = ggplot2::element_text(size = 9)
       )
     ) +
     ggplot2::labs(
-      title    = paste0("Relative Deprivation Index \u2014 ", ctry_code),
-      subtitle = "CIESIN/SEDAC GRDI v1 (2010\u20132020) | 1 km"
+      title    = paste0("Poverty Index (GRDI) \u2014 ", ctry_code),
+      subtitle = "CIESIN/SEDAC GRDI v1 (2010\u20132020) | 1 km resolution"
     )
 
   p2 <- ggplot2::ggplot() +
@@ -1147,17 +1579,22 @@ viz_plot_deprivation <- function(grdi_ras, dep_mask, ctry_sf,
                           ggplot2::aes(x = x, y = y),
                           fill = "#c0392b", alpha = 0.80) +
     ggplot2::labs(
-      title    = paste0("Vulnerability Mask \u2014 ", ctry_code),
-      subtitle = paste0("Red = cells with GRDI \u2265 ", threshold,
-                        " (classified as vulnerable)")
+      title    = paste0("Poverty Mask \u2014 ", ctry_code),
+      subtitle = paste0("Red cells: GRDI \u2265 ", threshold,
+                        " \u2014 classified as in poverty (above-median poverty level)")
     )
 
-  combined <- p1 + p2 +
+  combined <- p1 / p2 +
     patchwork::plot_annotation(
-      caption = .WP_CAPTION,
-      theme   = ggplot2::theme(
+      caption = paste0(
+        "Top map: GRDI continuous score. Bottom map: binary poverty mask ",
+        "(1 = in poverty, GRDI \u2265 ", threshold, "; 0/NA = not in poverty).\n",
+        .WP_CAPTION
+      ),
+      theme = ggplot2::theme(
         plot.caption    = ggplot2::element_text(hjust = 0, size = 9,
-                                                 color = "grey45"),
+                                                 color = "grey45",
+                                                 margin = ggplot2::margin(t = 4)),
         plot.background = ggplot2::element_rect(fill = "white", color = NA)
       )
     )
@@ -1196,13 +1633,13 @@ viz_workflow_diagram <- function(out_path = NULL, width = 10, height = 7,
     label = c(
       "Flood Tiles\n(GloFAS RP100)",
       "WorldPop\nAge\u2013Sex Bands",
-      "GRDI Deprivation\nIndex (CIESIN)",
+      "GRDI Poverty\nIndex (CIESIN)",
       "Binary Flood\nRaster (0/1)",
       "Demographic\nGroup Rasters",
-      "Deprivation\nMask (0/1)",
+      "Poverty\nMask (0/1)",
       "Flood Fraction\n@ 1 km grid",
-      "Vulnerable\nPopulation Rasters",
-      "Exposed Vulnerable Population\n(Vulnerable Pop \u00d7 Flood Fraction)",
+      "Poor\nPopulation Rasters",
+      "Exposed Poor Population\n(Poor Pop \u00d7 Flood Fraction)",
       "Indicators Table  \u00b7  Maps  \u00b7  Word Report"
     ),
     fill  = c(
@@ -1286,8 +1723,8 @@ viz_workflow_diagram <- function(out_path = NULL, width = 10, height = 7,
     ggplot2::scale_x_continuous(limits=c(-1.2, 10.4), expand=c(0,0)) +
     ggplot2::scale_y_continuous(limits=c(-0.25, 7.2),  expand=c(0,0)) +
     ggplot2::labs(
-      title   = "Climate Vulnerability & Flood Exposure \u2014 Methodology Workflow",
-      caption = paste0("GRDI = Global Relative Deprivation Index  \u00b7  ",
+      title   = "Poverty & Flood Exposure \u2014 Methodology Workflow",
+      caption = paste0("GRDI = Global Relative Deprivation Index (Poverty Index)  \u00b7  ",
                        "RP = Return Period  \u00b7  GloFAS = Global Flood Awareness System")
     ) +
     ggplot2::theme_void(base_size=11) +
@@ -1339,8 +1776,8 @@ viz_compare_scenarios <- function(ctry_indicators, ctry_code,
 
   scen_labels <- c(
     raw_exposure  = "Exposed population\n(% of total group pop)",
-    vuln_vs_vuln  = "Deprived population\n(% of deprived pop)",
-    vuln_vs_total = "Deprived population\n(% of total group pop)"
+    vuln_vs_vuln  = "Population in poverty\n(% of poor pop)",
+    vuln_vs_total = "Population in poverty\n(% of total group pop)"
   )
   scen_colours <- c(
     raw_exposure  = "#4e9ecf",
@@ -1352,13 +1789,13 @@ viz_compare_scenarios <- function(ctry_indicators, ctry_code,
     "\u25a0 Exposed population (% of total group pop): ",
     "numerator = group pop \u00d7 flood fraction; ",
     "denominator = total group population.\n",
-    "\u25a0 Deprived population (% of deprived pop): ",
-    "numerator = deprived pop \u00d7 flood fraction; ",
-    "denominator = total deprived population.\n",
-    "\u25a0 Deprived population (% of total group pop): ",
-    "numerator = deprived pop \u00d7 flood fraction; ",
+    "\u25a0 Population in poverty (% of poor pop): ",
+    "numerator = poor pop \u00d7 flood fraction; ",
+    "denominator = total poor population.\n",
+    "\u25a0 Population in poverty (% of total group pop): ",
+    "numerator = poor pop \u00d7 flood fraction; ",
     "denominator = total group population.\n",
-    "Deprivation defined as GRDI score \u2265 50 (CIESIN/SEDAC Global Relative Deprivation Index v1)."
+    "Poverty defined as GRDI score \u2265 50 (CIESIN/SEDAC Global Relative Deprivation Index v1)."
   )
 
   df <- ctry_indicators |>
@@ -1485,8 +1922,8 @@ viz_top_districts_heatmap <- function(indicators, ctry_code,
 
   scen_title <- dplyr::case_when(
     scenario == "raw_exposure"  ~ "All population",
-    scenario == "vuln_vs_vuln"  ~ "Deprived (% of deprived)",
-    scenario == "vuln_vs_total" ~ "Deprived (% of total group)",
+    scenario == "vuln_vs_vuln"  ~ "In poverty (% of poor)",
+    scenario == "vuln_vs_total" ~ "In poverty (% of total group)",
     TRUE ~ scenario
   )
 
@@ -1545,4 +1982,282 @@ viz_top_districts_heatmap <- function(indicators, ctry_code,
     return(invisible(p))
   }
   p
+}
+
+
+# ---------------------------------------------------------------------------
+# DEGURBA L1 — GROUPED BAR CHART
+# ---------------------------------------------------------------------------
+
+#' Grouped bar chart of flood exposure by DEGURBA Level 1 class
+#'
+#' Two-panel chart (raw exposure left, poor exposure right) showing the
+#' percentage of each demographic group exposed to flooding, broken down by the
+#' three DEGURBA L1 classes: Rural, Urban Cluster, Urban Centre.
+#'
+#' @param degurba_df    Tibble. Output of [deg_run_exposure()] for L1.
+#' @param ctry_code     Character. ISO3 code.
+#' @param hazard_name   Character.
+#' @param return_period Integer.
+#' @param dep_threshold Numeric. GRDI threshold used for poverty mask (caption).
+#' @param out_path      Character or NULL. Save path.
+#' @param width,height,dpi Numeric (default 13 × 6 in, 200 dpi).
+#'
+#' @return patchwork object.
+#' @export
+viz_degurba_l1_bars <- function(degurba_df, ctry_code,
+                                  hazard_name   = "River Flood",
+                                  return_period = 100,
+                                  dep_threshold = 50,
+                                  out_path      = NULL,
+                                  width = 13, height = 6, dpi = 200) {
+
+  l1_cols <- c(
+    "Rural"         = "#56A24E",
+    "Urban Cluster" = "#F7C557",
+    "Urban Centre"  = "#D73C28"
+  )
+
+  # Compact number formatter: 1234 -> "1.2K", 1234567 -> "1.2M"
+  fmt_pop <- function(x) {
+    dplyr::case_when(
+      x >= 1e6  ~ paste0(round(x / 1e6, 1), "M"),
+      x >= 1e3  ~ paste0(round(x / 1e3, 1), "K"),
+      TRUE      ~ as.character(round(x))
+    )
+  }
+
+  # Order groups by total raw exposed (descending = largest exposed on right)
+  grp_order <- degurba_df |>
+    dplyr::group_by(group_label) |>
+    dplyr::summarise(m = sum(pop_exposed, na.rm = TRUE), .groups = "drop") |>
+    dplyr::arrange(m) |>
+    dplyr::pull(group_label)
+
+  df <- degurba_df |>
+    dplyr::filter(dug_label %in% names(l1_cols)) |>
+    dplyr::mutate(
+      group_label = factor(group_label, levels = grp_order),
+      dug_label   = factor(dug_label,   levels = names(l1_cols))
+    )
+
+  make_panel <- function(y_var, y_label, panel_title) {
+    df_p <- df |> dplyr::mutate(.val = .data[[y_var]])
+    ggplot2::ggplot(df_p,
+                    ggplot2::aes(x = group_label, y = .val, fill = dug_label)) +
+      ggplot2::geom_col(
+        position = ggplot2::position_dodge(width = 0.78),
+        width = 0.70, colour = "white", linewidth = 0.2
+      ) +
+      ggplot2::geom_text(
+        ggplot2::aes(label = fmt_pop(.val)),
+        position = ggplot2::position_dodge(width = 0.78),
+        vjust = 0.5, hjust = -0.15, angle = 90, size = 2.55, colour = "grey30"
+      ) +
+      ggplot2::scale_fill_manual(values = l1_cols,
+                                  name = "Degree of Urbanisation") +
+      ggplot2::scale_y_continuous(
+        labels = scales::label_number(scale_cut = scales::cut_short_scale()),
+        expand = ggplot2::expansion(mult = c(0, 0.18))
+      ) +
+      ggplot2::labs(title = panel_title, x = NULL, y = y_label) +
+      ggplot2::theme_minimal(base_size = 11) +
+      ggplot2::theme(
+        plot.title         = ggplot2::element_text(face = "bold", size = 13,
+                                                    hjust = 0.5),
+        axis.text.x        = ggplot2::element_text(angle = 32, hjust = 1, size = 9),
+        legend.position    = "bottom",
+        legend.title       = ggplot2::element_text(face = "bold", size = 9),
+        legend.text        = ggplot2::element_text(size = 9),
+        panel.grid.major.x = ggplot2::element_blank(),
+        plot.background    = ggplot2::element_rect(fill = "white", color = NA)
+      )
+  }
+
+  p_raw  <- make_panel("pop_exposed",  "People exposed (count)",
+                        "All Population Exposed to Flooding")
+  p_poor <- make_panel("poor_exposed", "Poor people exposed (count)",
+                        paste0("Poor Population Exposed to Flooding",
+                               " (GRDI\u2265", dep_threshold, ")"))
+
+  combined <- (p_raw | p_poor) +
+    patchwork::plot_annotation(
+      title    = paste0("Flood Exposure by Degree of Urbanisation (L1) \u2014 ",
+                        ctry_code),
+      subtitle = paste0(hazard_name, " (RP", return_period,
+                        ")  |  DEGURBA Level 1: 3 urbanisation classes  |  Absolute counts"),
+      caption  = paste0(
+        "\u25a0 Rural: residual cells outside any urban cluster (density <300 inhab/km\u00b2).\n",
+        "\u25a0 Urban Cluster: contiguous cells (Queen) with density \u2265300 inhab/km\u00b2",
+        " and \u22655,000 total inhabitants (towns & semi-dense areas).\n",
+        "\u25a0 Urban Centre: contiguous cells (Rook) with density \u22651,500 inhab/km\u00b2",
+        " and \u226550,000 total inhabitants (cities & metropolitan areas).\n",
+        "Bars show absolute number of people (or poor people) exposed: pop \u00d7 flood fraction, ",
+        "summed over all cells of each urbanisation class.\n",
+        "Source: GHS-DUG R2023A. Poverty: GRDI \u2265 ", dep_threshold,
+        " (CIESIN/SEDAC). Population: WorldPop constrained UN-adjusted."
+      ),
+      theme = ggplot2::theme(
+        plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5, size = 16),
+        plot.subtitle   = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 12),
+        plot.caption    = ggplot2::element_text(hjust = 0, size = 9, color = "grey45",
+                                                 lineheight = 1.3,
+                                                 margin = ggplot2::margin(t = 6)),
+        plot.background = ggplot2::element_rect(fill = "white", color = NA)
+      )
+    )
+
+  if (!is.null(out_path)) {
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(out_path, plot = combined, width = width, height = height,
+                    dpi = dpi, bg = "white")
+    return(invisible(combined))
+  }
+  combined
+}
+
+
+# ---------------------------------------------------------------------------
+# DEGURBA L2 — HEATMAP
+# ---------------------------------------------------------------------------
+
+#' Heatmap of flood exposure by DEGURBA Level 2 class
+#'
+#' Two-panel heatmap (raw exposure left, poor exposure right) with DEGURBA L2
+#' classes on the y-axis (ordered rural → urban) and demographic groups on the
+#' x-axis. Each cell shows the percentage exposed. The Water class is excluded.
+#'
+#' @param degurba_df    Tibble. Output of [deg_run_exposure()] for L2.
+#' @param ctry_code     Character. ISO3 code.
+#' @param hazard_name   Character.
+#' @param return_period Integer.
+#' @param dep_threshold Numeric. GRDI threshold used for poverty mask (caption).
+#' @param out_path      Character or NULL. Save path.
+#' @param width,height,dpi Numeric (default 13 × 8 in, 200 dpi).
+#'
+#' @return patchwork object.
+#' @export
+viz_degurba_l2_heatmap <- function(degurba_df, ctry_code,
+                                     hazard_name   = "River Flood",
+                                     return_period = 100,
+                                     dep_threshold = 50,
+                                     out_path      = NULL,
+                                     width = 13, height = 8, dpi = 200) {
+
+  l2_order <- c(
+    "Very Low Density Rural",
+    "Low Density Rural",
+    "Rural Cluster",
+    "Suburban / Peri-Urban",
+    "Semi-Dense Urban Cluster",
+    "Dense Urban Cluster",
+    "Urban Centre"
+  )
+
+  df <- degurba_df |>
+    dplyr::filter(dug_label != "Water") |>
+    dplyr::mutate(dug_label = factor(dug_label, levels = rev(l2_order)))
+
+  fmt_pop_hm <- function(x) {
+    dplyr::case_when(
+      x >= 1e6  ~ paste0(round(x / 1e6, 1), "M"),
+      x >= 1e3  ~ paste0(round(x / 1e3, 1), "K"),
+      TRUE      ~ as.character(round(x))
+    )
+  }
+
+  grp_order <- df |>
+    dplyr::group_by(group_label) |>
+    dplyr::summarise(m = sum(pop_exposed, na.rm = TRUE), .groups = "drop") |>
+    dplyr::arrange(m) |>
+    dplyr::pull(group_label)
+  df$group_label <- factor(df$group_label, levels = grp_order)
+
+  make_panel <- function(y_var, panel_title, palette) {
+    df_p <- df |> dplyr::mutate(.val = .data[[y_var]])
+    # log10 scale for fill (wide range across urbanisation classes)
+    df_p <- df_p |> dplyr::mutate(
+      log_val  = log10(pmax(.val, 1)),
+      fill_pos = (log_val - min(log_val, na.rm = TRUE)) /
+                   max(max(log_val, na.rm = TRUE) - min(log_val, na.rm = TRUE), 1e-9),
+      txt_col  = ifelse(fill_pos > 0.55, "white", "grey20")
+    )
+    ggplot2::ggplot(df_p,
+                    ggplot2::aes(x = group_label, y = dug_label)) +
+      ggplot2::geom_tile(ggplot2::aes(fill = log_val),
+                          colour = "white", linewidth = 0.5) +
+      ggplot2::geom_text(
+        ggplot2::aes(label = fmt_pop_hm(.val), colour = txt_col),
+        size = 3.2, fontface = "bold"
+      ) +
+      ggplot2::scale_colour_identity() +
+      ggplot2::scale_fill_distiller(
+        palette = palette, direction = 1,
+        name    = "People exposed\n(log\u2081\u2080 scale)",
+        labels  = function(x) paste0("10^", round(x, 1)),
+        guide   = ggplot2::guide_colorbar(
+          barwidth = 8, barheight = 0.4,
+          title.position = "top", title.hjust = 0.5
+        )
+      ) +
+      ggplot2::scale_x_discrete(expand = c(0, 0)) +
+      ggplot2::scale_y_discrete(expand = c(0, 0)) +
+      ggplot2::labs(title = panel_title, x = NULL, y = NULL) +
+      ggplot2::theme_minimal(base_size = 11) +
+      ggplot2::theme(
+        plot.title      = ggplot2::element_text(face = "bold", size = 13,
+                                                 hjust = 0.5),
+        axis.text.x     = ggplot2::element_text(angle = 35, hjust = 1, size = 9),
+        axis.text.y     = ggplot2::element_text(size = 9),
+        legend.position = "bottom",
+        legend.title    = ggplot2::element_text(size = 9),
+        panel.grid      = ggplot2::element_blank(),
+        plot.background = ggplot2::element_rect(fill = "white", color = NA)
+      )
+  }
+
+  p_raw  <- make_panel("pop_exposed",
+                        "All Population Exposed to Flooding",
+                        "YlOrRd")
+  p_poor <- make_panel("poor_exposed",
+                        paste0("Poor Population Exposed to Flooding",
+                               " (GRDI\u2265", dep_threshold, ")"),
+                        "RdPu")
+
+  combined <- (p_raw | p_poor) +
+    patchwork::plot_annotation(
+      title    = paste0("Flood Exposure by Degree of Urbanisation (L2) \u2014 ",
+                        ctry_code),
+      subtitle = paste0(hazard_name, " (RP", return_period,
+                        ")  |  DEGURBA Level 2: 7 urbanisation classes  |  Absolute counts"),
+      caption  = paste0(
+        "Rows ordered most rural (top) to most urban (bottom); Water class excluded. ",
+        "Columns ordered by total raw exposure (lowest left).\n",
+        "Cell colour uses a log\u2081\u2080 scale (wide count range); cell labels show absolute counts (K/M).\n",
+        "Left panel: all group members exposed. ",
+        "Right panel: poor sub-group (GRDI \u2265 ", dep_threshold, ") exposed.\n",
+        "Class thresholds (EC-JRC GHS-DUG R2023A): Very Low Density Rural >0 inhab/km\u00b2 (residual); ",
+        "Low Density Rural \u226550 inhab/km\u00b2; Rural Cluster \u2265300 inhab/km\u00b2 & \u2265500 inhab (8-pt); ",
+        "Suburban/Peri-Urban \u2265300 inhab/km\u00b2 (non-cluster); Semi-Dense Urban Cluster \u2265900 inhab/km\u00b2 & \u22652,500 inhab; ",
+        "Dense Urban Cluster \u22651,500 inhab/km\u00b2 & \u22652,500 inhab; Urban Centre \u22651,500 inhab/km\u00b2 & \u226550,000 inhab.\n",
+        "Source: GHS-DUG R2023A (Global Human Settlement Layer). ",
+        "Poverty: CIESIN/SEDAC GRDI v1. Population: WorldPop constrained UN-adjusted."
+      ),
+      theme = ggplot2::theme(
+        plot.title      = ggplot2::element_text(face = "bold", hjust = 0.5, size = 16),
+        plot.subtitle   = ggplot2::element_text(hjust = 0.5, color = "grey40", size = 12),
+        plot.caption    = ggplot2::element_text(hjust = 0, size = 9, color = "grey45",
+                                                 lineheight = 1.3,
+                                                 margin = ggplot2::margin(t = 6)),
+        plot.background = ggplot2::element_rect(fill = "white", color = NA)
+      )
+    )
+
+  if (!is.null(out_path)) {
+    dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(out_path, plot = combined, width = width, height = height,
+                    dpi = dpi, bg = "white")
+    return(invisible(combined))
+  }
+  combined
 }

@@ -25,17 +25,17 @@ pacman::p_load(
 )
 
 # LOAD PACKAGE FUNCTIONS -----------------------------------------------
-if (requireNamespace("devtools", quietly = TRUE)) {
-  devtools::load_all(quiet = TRUE)
-} else {
-  source("R/worldpop_data.R")
-  source("R/flood_utils.R")
-  source("R/pop_utils.R")
-  source("R/deprivation_utils.R")
-  source("R/exposure_utils.R")
-  source("R/viz_utils.R")
-  source("R/report_utils.R")
-}
+# Always source directly so edits to R/ are picked up immediately.
+# devtools::load_all() can silently serve a stale in-memory cache when the
+# package byte-code or installed version hasn't been rebuilt after edits.
+source("R/worldpop_data.R")
+source("R/flood_utils.R")
+source("R/pop_utils.R")
+source("R/deprivation_utils.R")
+source("R/exposure_utils.R")
+source("R/degurba_utils.R")
+source("R/viz_utils.R")
+source("R/report_utils.R")
 
 # INPUT PARAMETERS -----------------------------------------------------
 ctry_code       <- "KEN"
@@ -56,6 +56,9 @@ grdi_path     <- paste0(
   "CIESIN_SEDAC_PMP_GRDI_2010_2020_1.00-20260316_120329/",
   "povmap-grdi-v1-geotiff/povmap-grdi-v1.tif"
 )
+
+dug_l1_path      <- "input/DUG/grids/GHS-DUG_GRID_L1.tif"
+dug_l2_path      <- "input/DUG/grids/GHS-DUG_GRID_L2.tif"
 
 flood_dir        <- "input/flood_layers_RP100/"
 flood_tiles_path <- "input/flood_tiles/tile_extends.geojson"
@@ -79,15 +82,18 @@ bubble_out         <- file.path(out_maps,    paste0(ctry_code, "_exposure_bubble
 hazard_map_out     <- file.path(out_maps,    paste0(ctry_code, "_hazard_layer.jpg"))
 pop_map_out        <- file.path(out_maps,    paste0(ctry_code, "_population_layer.jpg"))
 overlay_out        <- file.path(out_maps,    paste0(ctry_code, "_hazard_pop_overlay.jpg"))
-pop_facet_out      <- file.path(out_maps,    paste0(ctry_code, "_pop_by_group.jpg"))
-overlay_facet_out  <- file.path(out_maps,    paste0(ctry_code, "_flood_overlay_by_group.jpg"))
+# Individual group maps: paths built dynamically inside the per-group loop
+# (saved under out_maps/exposure_groups/ and out_maps/vuln_groups/)
 dep_map_out        <- file.path(out_maps,    paste0(ctry_code, "_deprivation.jpg"))
 workflow_out       <- file.path(out_maps,    paste0(ctry_code, "_methodology_workflow.jpg"))
 scenario_chart_out  <- file.path(out_maps,    paste0(ctry_code, "_scenario_comparison.jpg"))
 top5_heatmap_out    <- file.path(out_maps,    paste0(ctry_code, "_top5_districts_heatmap.jpg"))
+dug_l1_out          <- file.path(out_maps, "degurba", paste0(ctry_code, "_degurba_l1.jpg"))
+dug_l2_out          <- file.path(out_maps, "degurba", paste0(ctry_code, "_degurba_l2.jpg"))
 map_vuln_vuln_out   <- file.path(out_maps,    paste0(ctry_code, "_exposure_vuln_vs_vuln.jpg"))
 map_vuln_total_out  <- file.path(out_maps,    paste0(ctry_code, "_exposure_vuln_vs_total.jpg"))
 report_out          <- file.path(out_reports, paste0(ctry_code, "_flood_exposure_summary.docx"))
+ppt_out             <- file.path(out_reports, paste0(ctry_code, "_management_presentation.pptx"))
 
 # WORLDPOP DATA CHECK --------------------------------------------------
 # Check which global 1km constrained UN-adjusted band files are downloaded.
@@ -179,7 +185,13 @@ flood_frac   <- fld_aggregate_to_pop(rp100_bin_clip, pop_ref_c)
 
 # DEPRIVATION / VULNERABILITY MASK ------------------------------------
 dep_mask <- dep_build_mask(grdi_path, pop_ref_c, threshold = dep_threshold)
-message("Deprivation mask built at GRDI threshold >= ", dep_threshold)
+message("Poverty mask built at GRDI threshold >= ", dep_threshold)
+
+# DEGURBA GRIDS — align to population reference grid ------------------
+message("Aligning DEGURBA grids to population grid ...")
+dug_l1 <- deg_align_to_pop(dug_l1_path, pop_ref_c)
+dug_l2 <- deg_align_to_pop(dug_l2_path, pop_ref_c)
+message("  -> L1 and L2 grids aligned.")
 
 # DIAGNOSTIC MAPS (hazard, population, deprivation, overlay) ----------
 dir.create(out_maps,                           recursive = TRUE, showWarnings = FALSE)
@@ -239,30 +251,69 @@ viz_plot_deprivation(
   threshold = dep_threshold,
   out_path  = dep_map_out
 )
-message("Deprivation map saved to: ", dep_map_out)
+message("Poverty map saved to: ", dep_map_out)
 
-viz_facet_population(
-  pop_dir   = pop_dir,
-  ctry_sf   = ctry_admin0,
-  admin1_sf = admin1_ctry,
-  ctry_code = ctry_code,
-  year      = year,
-  out_path  = pop_facet_out
-)
-message("Faceted population map saved to: ", pop_facet_out)
+# INDIVIDUAL MAPS PER DEMOGRAPHIC GROUP --------------------------------
+# One exposure map and one vulnerability-exposure map per group.
+# Files saved to: out_maps/exposure_groups/ and out_maps/vuln_groups/
+out_exposure_grp <- file.path(out_maps, "exposure_groups")
+out_vuln_grp     <- file.path(out_maps, "vuln_groups")
+dir.create(out_exposure_grp, recursive = TRUE, showWarnings = FALSE)
+dir.create(out_vuln_grp,     recursive = TRUE, showWarnings = FALSE)
 
-viz_facet_overlay(
-  pop_dir        = pop_dir,
-  flood_frac_ras = flood_frac,
-  ctry_sf        = ctry_admin0,
-  admin1_sf      = admin1_ctry,
-  ctry_code      = ctry_code,
-  hazard_name    = hazard_name,
-  return_period  = return_period,
-  year           = year,
-  out_path       = overlay_facet_out
-)
-message("Faceted overlay map saved to: ", overlay_facet_out)
+purrr::walk(seq_len(nrow(WP_GROUP_META)), function(i) {
+  gname  <- WP_GROUP_META$group_name[i]
+  glabel <- WP_GROUP_META$label[i]
+
+  # Locate the processed group raster
+  grp_files <- list.files(pop_dir,
+                           pattern = paste0("^", tolower(ctry_code), "_", gname, "_"),
+                           full.names = TRUE)
+  if (length(grp_files) == 0) {
+    message("  [skip] No raster found for group: ", gname)
+    return(invisible(NULL))
+  }
+  pop_grp <- terra::rast(grp_files[1])
+  pop_grp_c <- pop_clip(pop_grp, ctry_admin0)
+
+  # --- Exposure map (all population × flood fraction) ---
+  exp_out <- file.path(out_exposure_grp,
+                        paste0(tolower(ctry_code), "_exposure_", gname, ".jpg"))
+  viz_plot_group_exposure(
+    pop_ras        = pop_grp_c,
+    flood_frac_ras = flood_frac,
+    ctry_sf        = ctry_admin0,
+    admin1_sf      = admin1_ctry,
+    ctry_code      = ctry_code,
+    group_label    = glabel,
+    hazard_name    = hazard_name,
+    return_period  = return_period,
+    year           = year,
+    out_path       = exp_out
+  )
+
+  # --- Vulnerability-exposure map (deprived pop × flood fraction) ---
+  vuln_out <- file.path(out_vuln_grp,
+                         paste0(tolower(ctry_code), "_vuln_exposure_", gname, ".jpg"))
+  viz_plot_group_vuln(
+    pop_ras        = pop_grp_c,
+    dep_mask       = dep_mask_c,
+    flood_frac_ras = flood_frac,
+    ctry_sf        = ctry_admin0,
+    admin1_sf      = admin1_ctry,
+    ctry_code      = ctry_code,
+    group_label    = glabel,
+    hazard_name    = hazard_name,
+    return_period  = return_period,
+    year           = year,
+    dep_threshold  = dep_threshold,
+    out_path       = vuln_out
+  )
+
+  message("  Group maps saved: ", glabel)
+})
+message("Individual group maps saved to: ", out_exposure_grp,
+        "\n                                ", out_vuln_grp)
 
 # EXPOSURE ACROSS ALL DEMOGRAPHIC GROUPS --------------------------------
 indicators <- exp_run_all_groups(
@@ -302,6 +353,40 @@ openxlsx::writeData(wb, "Admin2 Vuln vs Total",   ind_vuln_total)
 openxlsx::addWorksheet(wb, "Country Summary")
 openxlsx::writeData(wb, "Country Summary",        ctry_indicators)
 
+# DEGURBA — urbanisation-stratified exposure analysis ------------------
+message("\n--- DEGURBA Urbanisation-Stratified Exposure ---")
+dug_exp_l1 <- deg_run_exposure(
+  pop_dir       = pop_dir,
+  flood_frac_ras = flood_frac,
+  dug_ras       = dug_l1,
+  dep_mask      = dep_mask,
+  level_labels  = DEG_L1_LABELS,
+  ctry_boundary = ctry_admin0,
+  hazard_name   = hazard_name,
+  return_period = return_period,
+  year          = year
+)
+message("  -> L1 done (", nrow(dug_exp_l1), " rows)")
+
+dug_exp_l2 <- deg_run_exposure(
+  pop_dir       = pop_dir,
+  flood_frac_ras = flood_frac,
+  dug_ras       = dug_l2,
+  dep_mask      = dep_mask,
+  level_labels  = DEG_L2_LABELS,
+  ctry_boundary = ctry_admin0,
+  hazard_name   = hazard_name,
+  return_period = return_period,
+  year          = year
+)
+message("  -> L2 done (", nrow(dug_exp_l2), " rows)")
+
+# DEGURBA sheets in the workbook
+openxlsx::addWorksheet(wb, "DEGURBA L1 Exposure")
+openxlsx::writeData(wb, "DEGURBA L1 Exposure", dug_exp_l1)
+openxlsx::addWorksheet(wb, "DEGURBA L2 Exposure")
+openxlsx::writeData(wb, "DEGURBA L2 Exposure", dug_exp_l2)
+
 openxlsx::saveWorkbook(wb, indicators_out, overwrite = TRUE)
 message("Indicators saved to: ", indicators_out)
 
@@ -312,16 +397,16 @@ fn_raw <- paste0(
   "Interpretation: of all people in this demographic group, what share lives in a flood-prone area?"
 )
 fn_vuln_vuln <- paste0(
-  "Numerator: deprived population \u00d7 flood fraction ",
-  "(deprived = GRDI score \u2265 50, CIESIN/SEDAC GRDI v1). ",
-  "Denominator: total deprived (GRDI \u2265 50) population in each group.\n",
-  "Interpretation: of the deprived members of this group, what share also lives in a flood-prone area?"
+  "Numerator: poor population \u00d7 flood fraction ",
+  "(poor = GRDI score \u2265 50, CIESIN/SEDAC GRDI v1). ",
+  "Denominator: total poor (GRDI \u2265 50) population in each group.\n",
+  "Interpretation: of the poor members of this group, what share also lives in a flood-prone area?"
 )
 fn_vuln_total <- paste0(
-  "Numerator: deprived population \u00d7 flood fraction ",
-  "(deprived = GRDI score \u2265 50, CIESIN/SEDAC GRDI v1). ",
-  "Denominator: total group population (deprived + non-deprived).\n",
-  "Interpretation: of all members of this group, what share is both deprived AND flood-exposed?"
+  "Numerator: poor population \u00d7 flood fraction ",
+  "(poor = GRDI score \u2265 50, CIESIN/SEDAC GRDI v1). ",
+  "Denominator: total group population (poor + non-poor).\n",
+  "Interpretation: of all members of this group, what share is both poor AND flood-exposed?"
 )
 
 # VISUALISE ------------------------------------------------------------
@@ -361,7 +446,7 @@ viz_choropleth(
   ctry_sf       = ctry_admin0,
   admin1_sf     = admin1_ctry,
   ctry_code     = ctry_code,
-  hazard_name   = paste0(hazard_name, " \u2014 Deprived Pop (% of deprived)"),
+  hazard_name   = paste0(hazard_name, " \u2014 Poor Pop (% of poor)"),
   return_period = return_period,
   year          = year,
   footnote      = fn_vuln_vuln,
@@ -383,7 +468,7 @@ viz_choropleth(
   ctry_sf       = ctry_admin0,
   admin1_sf     = admin1_ctry,
   ctry_code     = ctry_code,
-  hazard_name   = paste0(hazard_name, " \u2014 Deprived Pop (% of total group)"),
+  hazard_name   = paste0(hazard_name, " \u2014 Poor Pop (% of total group)"),
   return_period = return_period,
   year          = year,
   footnote      = fn_vuln_total,
@@ -391,6 +476,46 @@ viz_choropleth(
   ncol          = 3
 )
 message("Choropleth (vuln vs total) saved to: ", map_vuln_total_out)
+
+## 1d. Individual two-panel choropleth per group (exposure + vulnerability)
+out_choropleth_grp <- file.path(out_maps, "choropleth_groups")
+dir.create(out_choropleth_grp, recursive = TRUE, showWarnings = FALSE)
+
+# Build a named list of paths — used directly in rpt_generate_word()
+choropleth_grp_paths <- purrr::map(
+  stats::setNames(WP_GROUP_META$group_name, WP_GROUP_META$label),
+  function(gname) {
+    glabel <- WP_GROUP_META$label[WP_GROUP_META$group_name == gname]
+
+    a2_raw  <- dplyr::filter(admin2_join,    group.label == glabel)
+    a2_vuln <- dplyr::filter(admin2_join_vv, group.label == glabel)
+
+    if (nrow(a2_raw) == 0 || nrow(a2_vuln) == 0) {
+      message("  [skip choropleth] no data for group: ", glabel)
+      return(NULL)
+    }
+
+    grp_out <- file.path(out_choropleth_grp,
+                          paste0(tolower(ctry_code), "_choropleth_", gname, ".jpg"))
+
+    viz_choropleth_group(
+      admin_sf_raw  = a2_raw,
+      admin_sf_vuln = a2_vuln,
+      ctry_sf       = ctry_admin0,
+      admin1_sf     = admin1_ctry,
+      ctry_code     = ctry_code,
+      group_label   = glabel,
+      hazard_name   = hazard_name,
+      return_period = return_period,
+      year          = year,
+      dep_threshold = dep_threshold,
+      out_path      = grp_out
+    )
+    message("  Choropleth saved: ", glabel)
+    grp_out
+  }
+) |> purrr::compact()   # drop any NULLs from skipped groups
+message("Individual group choropleths saved to: ", out_choropleth_grp)
 
 ## 2. Horizontal bar chart — absolute exposed by group (raw) -----------
 viz_group_bars(
@@ -444,30 +569,76 @@ viz_top_districts_heatmap(
 )
 message("Top-5 districts heatmap saved to: ", top5_heatmap_out)
 
+## 7. DEGURBA L1 — grouped bar chart -----------------------------------
+dir.create(dirname(dug_l1_out), recursive = TRUE, showWarnings = FALSE)
+viz_degurba_l1_bars(
+  degurba_df    = dug_exp_l1,
+  ctry_code     = ctry_code,
+  hazard_name   = hazard_name,
+  return_period = return_period,
+  dep_threshold = dep_threshold,
+  out_path      = dug_l1_out
+)
+message("DEGURBA L1 chart saved to: ", dug_l1_out)
+
+## 8. DEGURBA L2 — heatmap ---------------------------------------------
+viz_degurba_l2_heatmap(
+  degurba_df    = dug_exp_l2,
+  ctry_code     = ctry_code,
+  hazard_name   = hazard_name,
+  return_period = return_period,
+  dep_threshold = dep_threshold,
+  out_path      = dug_l2_out
+)
+message("DEGURBA L2 chart saved to: ", dug_l2_out)
+
 # GENERATE WORD REPORT -------------------------------------------------
 rpt_generate_word(
-  ctry_code            = ctry_code,
-  ctry_name            = ctry_name,
-  hazard_name          = hazard_name,
-  return_period        = return_period,
-  year                 = year,
-  ctry_indicators      = ctry_raw,
-  ctry_indicators_vuln = ctry_vuln_total,   # deprived pop exposed, % of total group
-  img_hazard           = hazard_map_out,
-  img_population       = pop_map_out,
-  img_overlay          = overlay_out,
-  img_deprivation      = dep_map_out,
-  img_workflow         = workflow_out,
-  img_choropleth       = map_out,
-  img_scenario_chart   = scenario_chart_out,
-  img_top5_heatmap     = top5_heatmap_out,
-  img_bars             = bars_out,
-  img_dotplot          = dotplot_out,
-  img_bubble           = bubble_out,
-  dep_threshold        = dep_threshold,
-  out_path             = report_out
+  ctry_code             = ctry_code,
+  ctry_name             = ctry_name,
+  hazard_name           = hazard_name,
+  return_period         = return_period,
+  year                  = year,
+  ctry_indicators       = ctry_raw,
+  ctry_indicators_vuln  = ctry_vuln_total,
+  img_hazard            = hazard_map_out,
+  img_population        = pop_map_out,
+  img_overlay           = overlay_out,
+  img_deprivation       = dep_map_out,
+  img_workflow          = workflow_out,
+  img_choropleth_groups = choropleth_grp_paths,
+  img_scenario_chart    = scenario_chart_out,
+  img_top5_heatmap      = top5_heatmap_out,
+  img_degurba_l1        = dug_l1_out,
+  img_degurba_l2        = dug_l2_out,
+  img_bars              = bars_out,
+  img_dotplot           = dotplot_out,
+  img_bubble            = bubble_out,
+  dep_threshold         = dep_threshold,
+  out_path              = report_out
 )
 
-message("\nDone. All outputs saved.")
+# GENERATE POWERPOINT PRESENTATION ------------------------------------
+# rpt_generate_ppt(
+#   ctry_code            = ctry_code,
+#   ctry_name            = ctry_name,
+#   hazard_name          = hazard_name,
+#   return_period        = return_period,
+#   year                 = year,
+#   ctry_indicators      = ctry_raw,
+#   ctry_indicators_vuln = ctry_vuln_total,
+#   img_hazard           = hazard_map_out,
+#   img_population       = pop_map_out,
+#   img_overlay          = overlay_out,
+#   img_deprivation      = dep_map_out,
+#   img_workflow         = workflow_out,
+#   img_scenario_chart   = scenario_chart_out,
+#   img_top5_heatmap     = top5_heatmap_out,
+#   choropleth_grp_paths = choropleth_grp_paths,
+#   dep_threshold        = dep_threshold,
+#   out_path             = ppt_out
+# )
+
+# message("\nDone. All outputs saved.")
 
 

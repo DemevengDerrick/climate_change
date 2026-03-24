@@ -23,7 +23,11 @@
       "Bash(\"C:/Users/demeveng_unfpa/AppData/Local/Programs/R/R-4.5.1/bin/Rscript.exe\" --vanilla -e \"a2 <- sf::st_read\\(''input/Kenya_Admin_Boundaries/KEN_Admin_2.shp'', quiet=TRUE\\); print\\(head\\(sf::st_drop_geometry\\(a2\\), 3\\)\\)\")",
       "WebFetch(domain:hub.worldpop.org)",
       "WebFetch(domain:data.worldpop.org)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(Rscript -e \"library\\(terra\\); r <- rast\\(''''input/DUG/grids/GHS-DUG_GRID_L1.tif''''\\); cat\\(''''CRS:'''', crs\\(r, describe=TRUE\\)$name, ''''\\\\n''''\\); cat\\(''''Resolution:'''', res\\(r\\), ''''\\\\n''''\\); cat\\(''''Extent:'''', as.character\\(ext\\(r\\)\\), ''''\\\\n''''\\); cat\\(''''Values:'''', sort\\(unique\\(values\\(r\\)\\)\\), ''''\\\\n''''\\); cat\\(''''NoData:'''', NAflag\\(r\\), ''''\\\\n''''\\)\")",
+      "Bash(Rscript -e \"library\\(terra\\); r <- rast\\(''''input/DUG/grids/GHS-DUG_GRID_L2.tif''''\\); cat\\(''''CRS:'''', crs\\(r, describe=TRUE\\)$name, ''''\\\\n''''\\); cat\\(''''Resolution:'''', res\\(r\\), ''''\\\\n''''\\); cat\\(''''Values:'''', sort\\(unique\\(values\\(r\\)\\)\\), ''''\\\\n''''\\)\")",
+      "Bash(\"C:/Program Files/R/R-4.4.2/bin/Rscript.exe\" -e \"library\\(terra\\); r1 <- rast\\(''input/DUG/grids/GHS-DUG_GRID_L1.tif''\\); r2 <- rast\\(''input/DUG/grids/GHS-DUG_GRID_L2.tif''\\); cat\\(''L1 CRS:'', crs\\(r1, proj=TRUE\\), ''\\\\n''\\); cat\\(''L1 Res:'', res\\(r1\\), ''\\\\n''\\); cat\\(''L1 Units:'', linearUnits\\(r1\\), ''\\\\n''\\); cat\\(''L1 Values:'', sort\\(unique\\(na.omit\\(values\\(r1\\)\\)\\)\\), ''\\\\n''\\); cat\\(''L2 Values:'', sort\\(unique\\(na.omit\\(values\\(r2\\)\\)\\)\\), ''\\\\n''\\)\")",
+      "Bash(\"/c/Users/demeveng_unfpa/AppData/Local/Programs/R/R-4.5.1/bin/Rscript.exe\" -e \"library\\(terra\\); r1 <- rast\\(''c:/Users/demeveng_unfpa/Documents/Climate_change/R_project/climate_change/input/DUG/grids/GHS-DUG_GRID_L1.tif''\\); r2 <- rast\\(''c:/Users/demeveng_unfpa/Documents/Climate_change/R_project/climate_change/input/DUG/grids/GHS-DUG_GRID_L2.tif''\\); cat\\(''L1 CRS:'', crs\\(r1, proj=TRUE\\), ''\\\\n''\\); cat\\(''L1 Res:'', res\\(r1\\), ''\\\\n''\\); cat\\(''L1 Values:'', sort\\(unique\\(na.omit\\(values\\(r1\\)\\)\\)\\), ''\\\\n''\\); cat\\(''L2 Values:'', sort\\(unique\\(na.omit\\(values\\(r2\\)\\)\\)\\), ''\\\\n''\\)\")"
     ]
   }
 }
